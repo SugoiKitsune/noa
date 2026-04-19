@@ -21,168 +21,73 @@ from scipy.optimize import brentq
 from scipy.interpolate import PchipInterpolator, RectBivariateSpline
 from pyquant.torch_spline import PchipSpline1D
 
+from affine_calibration.scripts.pricing_models import (
+    _bachelier_tv_undiscounted, bachelier_caplet_price,
+    bachelier_caplet_time_value, implied_vol_avg_rate, implied_vol_from_tv,
+)
+from affine_calibration.scripts.plotting import (
+    plot_arbitrage_heatmaps, plot_caplet_vol_surface,
+    plot_caplet_price_heatmaps, plot_spsa_convergence,
+)
+
 
 # =============================================================================
 # BACHELIER PRICING
 # =============================================================================
 
-def _bachelier_tv_undiscounted(F, K, sigma, g_hat):
-    """Numerically stable time-value of Bachelier formula (undiscounted per unit T).
-    
-    Uses TV = v·[φ(d) − d·Φ(−d)] for ITM (d>0), which avoids catastrophic
-    cancellation that occurs when subtracting intrinsic from total price.
-    scipy's norm.sf computes Φ(−d) accurately even for d > 30.
-    
-    Returns (intrinsic, time_value) so caller can use whichever form is needed.
+# =============================================================================
+# MARKET PVs & VEGAS (for calibration)
+# =============================================================================
+
+def compute_market_pvs(T_fixes, strikes, market_vols, market_fwds, f_ois_vec, timeline):
     """
-    v = sigma * g_hat
-    intrinsic = max(F - K, 0.0)
-    if v < 1e-300:
-        return intrinsic, 0.0
-    d = (F - K) / v
-    if d > 0:
-        tv = v * (norm.pdf(d) - d * norm.sf(d))
-    else:
-        # OTM/ATM: full price IS the time value (intrinsic = 0)
-        tv = (F - K) * norm.cdf(d) + v * norm.pdf(d)
-    return intrinsic, max(tv, 0.0)
+    Bachelier market prices for now-starting average rate caplets.
 
-
-def bachelier_caplet_price(F, K, T, sigma, disc=1.0):
+    PV = T * disc * ((F-K)Φ(d) + σ·ĝ·φ(d)),  ĝ = √(T/3), F = I(0,T)/T.
     """
-    Bachelier (normal) price for NOW-STARTING average rate caplet.
-    
-    PV = T · disc · [(F-K)Φ(d) + σ·ĝ·φ(d)]
-    where ĝ = √(T/3), d = (F-K)/(σ·ĝ)
-    
-    This is the average rate variant (g_hat = sqrt(T/3)) for caplets whose
-    payoff is max(∫₀ᵀ a_t dt - T·K, 0), consistent with the MC simulation.
-    
-    Args:
-        F: Forward rate = I(0,T)/T, average instantaneous forward (decimal)
-        K: Strike (decimal)
-        T: Time to maturity (years). For now-starting, tenor = T.
-        sigma: Normal vol (decimal, e.g., 0.04 = 4%)
-        disc: Discount factor to payment date
-    
-    Returns:
-        Price as fraction of notional (e.g., 0.01 = 1% = 100bp)
+    device = T_fixes.device
+    dt = (timeline[1] - timeline[0]).item()
+    n = len(T_fixes)
+    pv = torch.zeros(n, dtype=torch.float32, device=device)
+
+    for c in range(n):
+        T = T_fixes[c].item()
+        idx_T = min(int(T / dt), len(f_ois_vec) - 1)
+        disc = torch.exp(-f_ois_vec[:idx_T + 1].sum() * dt)
+        g_hat = np.sqrt(max(T / 3.0, 1e-8))
+        d = ((market_fwds[c] - strikes[c]) / (market_vols[c] * g_hat + 1e-10)).item()
+        undiscounted = (market_fwds[c] - strikes[c]) * norm.cdf(d) + market_vols[c] * g_hat * norm.pdf(d)
+        pv[c] = T * disc * undiscounted
+    return pv
+
+
+def compute_market_vegas(T_fixes, strikes, market_vols, market_fwds, f_ois_vec, timeline,
+                         vega_floor_pct=0.05):
     """
-    if T <= 0:
-        return max(F - K, 0) * T * disc
-    
-    g_hat = np.sqrt(T / 3.0)
-    if sigma * g_hat < 1e-10:
-        return max(F - K, 0) * T * disc
-    
-    d = (F - K) / (sigma * g_hat)
-    undiscounted = (F - K) * norm.cdf(d) + sigma * g_hat * norm.pdf(d)
-    
-    return T * disc * undiscounted
+    Bachelier vegas for vega-weighted calibration loss.
 
+    vega_i = T_i · disc_i · ĝ_i · φ(d_i).  Floored at ``vega_floor_pct``
+    × median to prevent far-OTM blow-up.
 
-def bachelier_caplet_time_value(F, K, T, sigma, disc=1.0):
-    """Numerically stable time-value of Bachelier avg rate caplet.
-    
-    For deep ITM (d > 8), the standard price (F-K)Φ(d) + σĝφ(d) stores
-    intrinsic + TV in one float64, losing TV when TV < ε·intrinsic.
-    This function computes TV directly via v·[φ(d) − d·Φ(−d)], which
-    scipy evaluates accurately even for d > 30.
-    
-    Returns:
-        Time value only (excluding intrinsic), as fraction of notional.
+    Returns (vegas_floored, n_floored).
     """
-    if T <= 0 or sigma <= 0:
-        return 0.0
-    g_hat = np.sqrt(T / 3.0)
-    _, tv = _bachelier_tv_undiscounted(F, K, sigma, g_hat)
-    return T * disc * tv
+    device = T_fixes.device
+    dt = (timeline[1] - timeline[0]).item()
+    n = len(T_fixes)
 
+    disc_vec = torch.zeros(n, device=device)
+    for c in range(n):
+        idx_T = min(int(T_fixes[c].item() / dt), len(f_ois_vec) - 1)
+        disc_vec[c] = torch.exp(-f_ois_vec[:idx_T + 1].sum() * dt)
 
-def implied_vol_avg_rate(F, K, T, pv, disc=1.0, tol=1e-9, max_iter=200):
-    """
-    Invert Bachelier formula for now-starting average rate caplet: PV → σ_n.
+    g_hat = torch.sqrt(T_fixes / 3.0)
+    d = (market_fwds - strikes) / (market_vols * g_hat + 1e-10)
+    phi_d = (1.0 / np.sqrt(2 * np.pi)) * torch.exp(-0.5 * d ** 2)
+    vegas = T_fixes * disc_vec * g_hat * phi_d
 
-    Solves: undiscounted_unit = (F-K)Φ(d) + σ·ĝ·φ(d) for σ
-    where ĝ = √(T/3), d = (F-K)/(σ·ĝ)
-
-    For deep ITM (F ≫ K), falls back to time-value formulation using
-    Φ(−d) via scipy's norm.sf, which is accurate to full precision.
-
-    Args:
-        F: Forward rate = I(0,T)/T (decimal)
-        K: Strike (decimal)
-        T: Time to maturity (years)
-        pv: Caplet price (fraction of notional)
-        disc: Discount factor to payment date
-        tol: Root-finding tolerance
-        max_iter: Maximum Brentq iterations
-
-    Returns:
-        Implied normal vol (decimal), or np.nan if inversion fails.
-    """
-    if T <= 0 or pv <= 0:
-        return np.nan
-
-    g_hat = np.sqrt(T / 3.0)
-    und_unit = pv / (T * disc)
-    intrinsic = max(F - K, 0.0)
-
-    # Standard inversion for OTM/ATM or mild ITM
-    if und_unit > intrinsic + 1e-15:
-        def price_error(sigma):
-            d = (F - K) / (sigma * g_hat + 1e-15)
-            return (F - K) * norm.cdf(d) + sigma * g_hat * norm.pdf(d) - und_unit
-        try:
-            return brentq(price_error, 1e-10, 10.0, xtol=tol, maxiter=max_iter)
-        except ValueError:
-            pass  # fall through to TV solver
-
-    # Deep ITM fallback: solve from time-value using stable Φ(−d) formulation
-    if intrinsic > 0:
-        time_value = max(und_unit - intrinsic, 0.0)
-        def tv_error(sigma):
-            v = sigma * g_hat
-            d = (F - K) / (v + 1e-300)
-            return v * (norm.pdf(d) - d * norm.sf(d)) - time_value
-        try:
-            return brentq(tv_error, 1e-10, 10.0, xtol=tol, maxiter=max_iter)
-        except ValueError:
-            return np.nan
-
-    return np.nan
-
-
-def implied_vol_from_tv(F, K, T, time_value, disc=1.0, tol=1e-9, max_iter=200):
-    """Invert Bachelier vol from separately-computed time value.
-    
-    Use with bachelier_caplet_time_value() for lossless deep-ITM round-trips.
-    The TV channel preserves full precision because it never adds TV to intrinsic.
-    
-    Args:
-        F, K, T: Forward, strike, maturity
-        time_value: Time value only (from bachelier_caplet_time_value)
-        disc: Discount factor
-    
-    Returns:
-        Implied normal vol (decimal), or np.nan if inversion fails.
-    """
-    if T <= 0 or time_value <= 0:
-        return np.nan
-    g_hat = np.sqrt(T / 3.0)
-    tv_und = time_value / (T * disc)
-
-    def tv_error(sigma):
-        v = sigma * g_hat
-        d = (F - K) / (v + 1e-300)
-        if d > 0:
-            return v * (norm.pdf(d) - d * norm.sf(d)) - tv_und
-        else:
-            return (F - K) * norm.cdf(d) + v * norm.pdf(d) - tv_und
-    try:
-        return brentq(tv_error, 1e-10, 10.0, xtol=tol, maxiter=max_iter)
-    except ValueError:
-        return np.nan
+    floor = vegas.median() * vega_floor_pct
+    n_floored = int((vegas < floor).sum().item())
+    return torch.clamp(vegas, min=floor.item()), n_floored
 
 
 # =============================================================================
@@ -440,93 +345,6 @@ def check_surface_arbitrage(vol_surface_df, fwd_func, disc_func, tau=0.25,
     return arb_df, summary
 
 
-def plot_arbitrage_heatmaps(arb_df, title_prefix=""):
-    """
-    Plot heatmaps showing arbitrage conditions across the surface.
-    
-    Args:
-        arb_df: DataFrame from check_surface_arbitrage()
-        title_prefix: Prefix for plot titles (e.g., "Market" or "Model")
-    """
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-    
-    T_grid = sorted(arb_df['T'].unique())
-    K_grid = sorted(arb_df['K'].unique())
-    n_total_pts = len(T_grid) * len(K_grid)
-    
-    # 1. dw/dT heatmap (calendar condition on total variance w = σ²T)
-    dw_dT_matrix = arb_df.pivot(index='K', columns='T', values='dw_dT').values
-    im1 = axes[0, 0].imshow(dw_dT_matrix, aspect='auto', origin='lower',
-                             extent=[T_grid[0], T_grid[-1], K_grid[0]*100, K_grid[-1]*100],
-                             cmap='RdYlGn')
-    axes[0, 0].set_xlabel('Maturity (Y)')
-    axes[0, 0].set_ylabel('Strike (%)')
-    axes[0, 0].set_title(f'{title_prefix} dw/dT (w=σ²T)\nCalendar Arb (should ≥ 0)')
-    plt.colorbar(im1, ax=axes[0, 0])
-    
-    # 2. d²C/dK² heatmap (butterfly condition)
-    d2C_dK2_matrix = arb_df.pivot(index='K', columns='T', values='d2C_dK2').values
-    im2 = axes[0, 1].imshow(d2C_dK2_matrix, aspect='auto', origin='lower',
-                             extent=[T_grid[0], T_grid[-1], K_grid[0]*100, K_grid[-1]*100],
-                             cmap='RdYlGn')
-    axes[0, 1].set_xlabel('Maturity (Y)')
-    axes[0, 1].set_ylabel('Strike (%)')
-    axes[0, 1].set_title(f'{title_prefix} d²C/dK²\nButterfly Arb (should ≥ 0)')
-    plt.colorbar(im2, ax=axes[0, 1])
-    
-    # 3. dC/dT heatmap (price time derivative - needed for local vol)
-    dC_dT_matrix = arb_df.pivot(index='K', columns='T', values='dC_dT').values
-    n_dC_dT_pos = np.sum(dC_dT_matrix > -1e-10)
-    im3 = axes[0, 2].imshow(dC_dT_matrix, aspect='auto', origin='lower',
-                             extent=[T_grid[0], T_grid[-1], K_grid[0]*100, K_grid[-1]*100],
-                             cmap='RdYlGn')
-    axes[0, 2].set_xlabel('Maturity (Y)')
-    axes[0, 2].set_ylabel('Strike (%)')
-    axes[0, 2].set_title(f'{title_prefix} dC/dT (price derivative)\nNeeded for local vol ≥ 0: {n_dC_dT_pos}/{n_total_pts}')
-    plt.colorbar(im3, ax=axes[0, 2])
-    
-    # 4. Local vol surface - show all computable values
-    local_var_matrix = arb_df.pivot(index='K', columns='T', values='local_var').values
-    # For display: show local_vol (sqrt) where positive, indicate negative variance
-    local_vol_matrix = np.where(local_var_matrix > 0, np.sqrt(local_var_matrix) * 100, np.nan)
-    # Use percentile for vmax, ignoring NaN
-    valid_vals = local_vol_matrix[~np.isnan(local_vol_matrix)]
-    vmax = np.percentile(valid_vals, 95) if len(valid_vals) > 0 else 1.0
-    im4 = axes[1, 0].imshow(local_vol_matrix, aspect='auto', origin='lower',
-                             extent=[T_grid[0], T_grid[-1], K_grid[0]*100, K_grid[-1]*100],
-                             cmap='viridis', vmin=0, vmax=vmax)
-    axes[1, 0].set_xlabel('Maturity (Y)')
-    axes[1, 0].set_ylabel('Strike (%)')
-    n_local_vol_valid = np.sum(~np.isnan(local_vol_matrix))
-    axes[1, 0].set_title(f'{title_prefix} Dupire Local Vol (%)\nσ²_loc = dC/dT / (½d²C/dK²): {n_local_vol_valid}/{n_total_pts}')
-    plt.colorbar(im4, ax=axes[1, 0])
-    
-    # 5. Arbitrage violation map (based on dw/dT >= 0 AND d²C/dK² >= 0)
-    valid_matrix = arb_df.pivot(index='K', columns='T', values='is_valid').values.astype(float)
-    n_valid = int(np.sum(valid_matrix))
-    im5 = axes[1, 1].imshow(valid_matrix, aspect='auto', origin='lower',
-                             extent=[T_grid[0], T_grid[-1], K_grid[0]*100, K_grid[-1]*100],
-                             cmap='RdYlGn', vmin=0, vmax=1)
-    axes[1, 1].set_xlabel('Maturity (Y)')
-    axes[1, 1].set_ylabel('Strike (%)')
-    axes[1, 1].set_title(f'{title_prefix} Arbitrage-Free\n(dw/dT≥0 ∧ d²C/dK²≥0): {n_valid}/{n_total_pts} ({100*n_valid/n_total_pts:.1f}%)')
-    plt.colorbar(im5, ax=axes[1, 1])
-    
-    # 6. Local vol computable map (d²C/dK² > 0 AND dC/dT > 0)
-    local_vol_ok = (~np.isnan(local_vol_matrix)).astype(float)
-    n_ok = int(np.sum(local_vol_ok))
-    im6 = axes[1, 2].imshow(local_vol_ok, aspect='auto', origin='lower',
-                             extent=[T_grid[0], T_grid[-1], K_grid[0]*100, K_grid[-1]*100],
-                             cmap='RdYlGn', vmin=0, vmax=1)
-    axes[1, 2].set_xlabel('Maturity (Y)')
-    axes[1, 2].set_ylabel('Strike (%)')
-    axes[1, 2].set_title(f'{title_prefix} Local Vol Computable\n(d²C/dK²>0 ∧ dC/dT>0): {n_ok}/{n_total_pts} ({100*n_ok/n_total_pts:.1f}%)')
-    plt.colorbar(im6, ax=axes[1, 2])
-    
-    plt.tight_layout()
-    plt.show()
-
-
 def print_arbitrage_summary(arb_df, summary, title=""):
     """
     Print summary of arbitrage check results.
@@ -776,13 +594,33 @@ def generate_caplet_vol_surface(vol_key_rate, fwd_key_rate, fwd_ois=None, versio
         F = float(F_model[i]) if F_model is not None else avg_inst_forward(T)
         disc = float(P_model[i]) if P_model is not None else ois_discount(T)
         
+        intrinsic_und = max(F - K, 0)
+        undiscounted_unit = model_pv / (T * disc + 1e-15)
+        
         # Use module-level implied_vol_avg_rate (handles deep ITM via stable TV channel)
         model_vol = implied_vol_avg_rate(F, K, T, model_pv, disc)
         
-        intrinsic_und = max(F - K, 0)
-        undiscounted_unit = model_pv / (T * disc + 1e-15)
         if undiscounted_unit < intrinsic_und:
             arbitrage_violations += 1  # convexity effect, not true arb
+        
+        # Sub-intrinsic retry: F_model may overestimate the forward (model miscalibrated),
+        # causing intrinsic > und_unit and a NaN return. Re-invert using the market
+        # forward so the displayed vol is the effective vol the market would quote for
+        # the model's PV — meaningful for diagnosing calibration quality.
+        if (np.isnan(model_vol) or model_vol < 1e-5) and model_pv > 0:
+            F_mkt = avg_inst_forward(T)
+            disc_mkt = ois_discount(T)
+            model_vol_retry = implied_vol_avg_rate(F_mkt, K, T, model_pv, disc_mkt)
+            if not np.isnan(model_vol_retry) and model_vol_retry >= 1e-5:
+                model_vol = model_vol_retry
+            else:
+                model_vol = np.nan  # let vega-delta fallback below handle it
+        
+        # No evaluation fallback. For deep ITM caplets where the model prices at
+        # intrinsic (time value ≈ 0), Bachelier vol inversion is ill-conditioned:
+        # any PV difference divided by near-zero vega gives an astronomical correction.
+        # Show NaN honestly — the training loss (calib_objective.py) has its own
+        # vega-delta proxy for gradient signal; the display should not fake values.
         
         if np.isnan(model_vol):
             failed_inversions += 1
@@ -790,20 +628,48 @@ def generate_caplet_vol_surface(vol_key_rate, fwd_key_rate, fwd_ois=None, versio
             model_vols.append(np.nan)
             vol_errors.append(np.nan)
         else:
-            model_vols.append(model_vol)
-            vol_errors.append(model_vol - market_vol)
+            model_vols.append(float(model_vol))
+            vol_errors.append(float(model_vol) - market_vol)
     
     model_vols_arr = np.array(model_vols, dtype=float)
-    
-    # No capping — store raw model vols directly
-    vol_results[f'model_vol_{version_name}'] = model_vols_arr
-    vol_errors = model_vols_arr - vol_results['implied_normal_vol'].values
+
+    # Per-maturity strike interpolation: fill NaN vols by linear interpolation
+    # from valid inversion neighbors within the same maturity slice.
+    # Needed for deep-ITM caplets where time-value ≈ 0 makes Bachelier inversion
+    # ill-conditioned — the model IS correctly pricing them at intrinsic, but we
+    # can't invert a number that's at floating-point noise. Linear interp from
+    # the adjacent valid strikes (which ARE invertible) gives a smooth consistent
+    # display without any fake proxy logic.
+    mats_arr    = vol_results['time_to_maturity'].values
+    strikes_all = vol_results['strike'].values
+    model_vols_final = model_vols_arr.copy()
+    n_interpolated = 0
+
+    for T_u in np.unique(mats_arr):
+        mask  = mats_arr == T_u
+        K_sl  = strikes_all[mask]
+        v_sl  = model_vols_arr[mask].copy()
+        valid = ~np.isnan(v_sl)
+
+        if valid.all() or not valid.any() or valid.sum() < 2:
+            continue  # nothing to fill, or not enough points to interpolate
+
+        # np.interp: linear within valid strike range, holds boundary value outside
+        v_sl[~valid] = np.interp(K_sl[~valid], K_sl[valid], v_sl[valid]).clip(min=1e-5)
+        model_vols_final[mask] = v_sl
+        n_interpolated += (~valid).sum()
+
+    if n_interpolated > 0:
+        print(f"Interpolated {n_interpolated} NaN vol(s) from neighboring strikes within same maturity.")
+
+    vol_results[f'model_vol_{version_name}'] = model_vols_final
+    vol_errors = model_vols_final - vol_results['implied_normal_vol'].values
     vol_results[f'vol_error_{version_name}'] = vol_errors
-    
+
     valid_mask = ~np.isnan(vol_errors)
     vol_rmse = np.sqrt(np.mean(vol_errors[valid_mask]**2)) if valid_mask.any() else np.nan
     success_rate = valid_mask.sum() / len(vol_errors) * 100
-    
+
     n_failed = (~valid_mask).sum()
     
     print(f"\n{'='*70}")
@@ -812,10 +678,10 @@ def generate_caplet_vol_surface(vol_key_rate, fwd_key_rate, fwd_ois=None, versio
     print(f"Total caplets:        {len(vol_errors)}")
     print(f"Valid vol inversions: {valid_mask.sum()} ({success_rate:.1f}%)")
     print(f"Failed inversions:    {n_failed}")
-    print(f"Sub-intrinsic (conv): {arbitrage_violations} (MC price < det. intrinsic → NaN)")
+    print(f"Sub-intrinsic (conv): {arbitrage_violations} (MC price < det. intrinsic -> NaN)")
     print(f"Vol RMSE:             {vol_rmse*100:.3f}%")
     if valid_mask.any():
-        valid_vols = model_vols_arr[valid_mask]
+        valid_vols = model_vols_final[valid_mask]
         print(f"Model vol range:      {valid_vols.min()*100:.2f}% - {valid_vols.max()*100:.2f}%")
         print(f"Market vol range:     {vol_results['implied_normal_vol'].min()*100:.2f}% - {vol_results['implied_normal_vol'].max()*100:.2f}%")
     print(f"{'='*70}\n")
@@ -823,247 +689,257 @@ def generate_caplet_vol_surface(vol_key_rate, fwd_key_rate, fwd_ois=None, versio
     return vol_results, vol_rmse
 
 
-def plot_caplet_vol_surface(vol_results, version_name="Model", plot_maturities=[1.0, 3.0, 5.0, 7.0, 10.0],
-                            fwd_key_rate=None):
+# =============================================================================
+# INTERACTIVE VISUALISATION — Plotly 3D + Signum 2D per-maturity smiles
+# =============================================================================
+
+def plot_vol_surface_interactive(vol_results, version_name="v15",
+                                  itm_threshold=0.03, fwd_key_rate=None,
+                                  open_browser=False):
     """
-    Plot 3D volatility surface comparison: market vs model.
-    
-    Raw model vols plotted without any clipping or limits.
-    
-    Parameters:
-    -----------
+    Primary interactive vol surface plot: market (Blues) + model (Oranges)
+    overlaid on the same 3D axes, plus a 2D signed-error heatmap below.
+
+    Parameters
+    ----------
     vol_results : pd.DataFrame
-        Output from generate_caplet_vol_surface() with market and model vols
+        Output of evaluate_vol_surface / generate_caplet_vol_surface.
+        Required columns: time_to_maturity, strike, implied_normal_vol,
+        model_vol_{version_name}, vol_error_{version_name}.
     version_name : str
-        Version identifier for plot titles
-    plot_maturities : list
-        Maturities to highlight in 2D slice plots
+        Tag used to locate model_vol_{version_name} and vol_error_{version_name}.
+    itm_threshold : float
+        Kept for API compatibility — deep ITM masking is no longer applied;
+        both surfaces cover the full strike-maturity grid.
     fwd_key_rate : pd.DataFrame, optional
-        Forward rate curve — if provided, forward line is drawn on smile plots
+        Unused (kept for API compatibility).
+    open_browser : bool
+        False (default) — render inline in the notebook.
+        True  — write a standalone HTML file and open it in the system browser,
+                which gives fully unobstructed WebGL 3D rotation.
     """
-    model_vol_col = f'model_vol_{version_name}'
-    error_col = f'vol_error_{version_name}'
-    
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        print("plotly not installed — run:  pip install plotly")
+        return
+
+    from scipy.ndimage import distance_transform_edt
+
+    model_col = f'model_vol_{version_name}'
+    error_col  = f'vol_error_{version_name}'
+
     maturities = sorted(vol_results['time_to_maturity'].unique())
-    strikes = sorted(vol_results['strike'].unique())
-    T_grid, K_grid = np.meshgrid(maturities, strikes)
-    
-    market_vol_grid = np.zeros_like(T_grid)
-    model_vol_grid = np.full_like(T_grid, np.nan)
-    error_grid = np.full_like(T_grid, np.nan)
-    
-    for i, k in enumerate(strikes):
-        for j, t in enumerate(maturities):
-            row = vol_results[(vol_results['time_to_maturity'] == t) & (vol_results['strike'] == k)]
-            if len(row) > 0:
-                market_vol_grid[i, j] = row['implied_normal_vol'].values[0] * 100
-                model_val = row[model_vol_col].values[0]
-                if not np.isnan(model_val):
-                    model_vol_grid[i, j] = model_val * 100
-                    error_grid[i, j] = (model_val - row['implied_normal_vol'].values[0]) * 100
-    
-    # Clamp model vols to a sane range around market to kill triangle artifacts
-    mkt_lo = np.nanmin(market_vol_grid) * 0.2
-    mkt_hi = np.nanmax(market_vol_grid) * 3.0
-    model_vol_display = np.where(np.isnan(model_vol_grid), np.nanmedian(model_vol_grid), model_vol_grid)
-    model_vol_display = np.clip(model_vol_display, mkt_lo, mkt_hi)
-    error_display = np.where(np.isnan(error_grid), 0, error_grid)
-    err_lim = max(abs(np.nanpercentile(error_grid[~np.isnan(error_grid)], 5)),
-                  abs(np.nanpercentile(error_grid[~np.isnan(error_grid)], 95))) if (~np.isnan(error_grid)).any() else 1.0
-    error_display = np.clip(error_display, -err_lim * 1.5, err_lim * 1.5)
-    
-    # Build forward curve for reference
-    fwd_interp = None
-    if fwd_key_rate is not None:
-        fs = fwd_key_rate.sort_values('time_to_maturity')
-        fwd_interp = PchipInterpolator(fs['time_to_maturity'].values, fs['forward_rate'].values)
-    
-    total_points = T_grid.size
-    valid_model_points = np.sum(~np.isnan(model_vol_grid))
-    coverage_pct = valid_model_points / total_points * 100
-    
-    print(f"\nSurface Coverage: {valid_model_points}/{total_points} points ({coverage_pct:.1f}%)")
-    if total_points > valid_model_points:
-        print(f"Missing {total_points - valid_model_points} points due to inversion failures")
-    
-    fig = plt.figure(figsize=(20, 12))
-    
-    # Shared z-limits for market & model so visual scale matches
-    z_lo = min(np.nanmin(market_vol_grid), np.nanmin(model_vol_display)) * 0.9
-    z_hi = max(np.nanmax(market_vol_grid), np.nanmax(model_vol_display)) * 1.1
-    
-    # Row 1: 3D Surfaces — SAME z-limits on market & model
-    ax1 = fig.add_subplot(2, 3, 1, projection='3d')
-    surf1 = ax1.plot_surface(T_grid, K_grid * 100, market_vol_grid,
-                             cmap='viridis', alpha=0.9, edgecolor='none')
-    ax1.set_xlabel('Maturity (y)', fontsize=10, labelpad=5)
-    ax1.set_ylabel('Strike (%)', fontsize=10, labelpad=5)
-    ax1.set_zlabel('Vol (%)', fontsize=10, labelpad=5)
-    ax1.set_zlim(z_lo, z_hi)
-    ax1.set_title('Market Volatility Surface', fontsize=12, fontweight='bold')
-    ax1.view_init(elev=25, azim=135)
-    fig.colorbar(surf1, ax=ax1, shrink=0.5, aspect=10)
-    
-    ax2 = fig.add_subplot(2, 3, 2, projection='3d')
-    surf2 = ax2.plot_surface(T_grid, K_grid * 100, model_vol_display,
-                             cmap='viridis', alpha=0.9, edgecolor='none')
-    ax2.set_xlabel('Maturity (y)', fontsize=10, labelpad=5)
-    ax2.set_ylabel('Strike (%)', fontsize=10, labelpad=5)
-    ax2.set_zlabel('Vol (%)', fontsize=10, labelpad=5)
-    ax2.set_zlim(z_lo, z_hi)
-    ax2.set_title(f'{version_name.upper()} Model Volatility Surface', fontsize=12, fontweight='bold')
-    ax2.view_init(elev=25, azim=135)
-    fig.colorbar(surf2, ax=ax2, shrink=0.5, aspect=10)
-    
-    ax3 = fig.add_subplot(2, 3, 3, projection='3d')
-    surf3 = ax3.plot_surface(T_grid, K_grid * 100, error_display,
-                             cmap='RdBu_r', alpha=0.9, edgecolor='none')
-    ax3.set_xlabel('Maturity (y)', fontsize=10, labelpad=5)
-    ax3.set_ylabel('Strike (%)', fontsize=10, labelpad=5)
-    ax3.set_zlabel('Error (%)', fontsize=10, labelpad=5)
-    ax3.set_title(f'{version_name.upper()} - Market (Vol Error)', fontsize=12, fontweight='bold')
-    ax3.view_init(elev=25, azim=135)
-    fig.colorbar(surf3, ax=ax3, shrink=0.5, aspect=10)
-    
-    # Row 2: 2D Maturity Slices — market & model overlaid, error separate
-    ax4 = fig.add_subplot(2, 3, 4)
-    colors = plt.cm.tab10(np.linspace(0, 1, len(plot_maturities)))
-    for ci, mat in enumerate(plot_maturities):
-        if mat in maturities:
-            subset = vol_results[vol_results['time_to_maturity'] == mat].sort_values('strike')
-            lbl = f'{mat:.0f}Y' if mat >= 1 else f'{mat*12:.0f}M'
-            ax4.plot(subset['strike'] * 100, subset['implied_normal_vol'] * 100,
-                    'o-', color=colors[ci], ms=3, lw=2, label=f'{lbl} Market')
-    ax4.set_xlabel('Strike (%)', fontsize=11)
-    ax4.set_ylabel('Implied Vol (%)', fontsize=11)
-    ax4.set_title('Market Vol - Maturity Slices', fontsize=12, fontweight='bold')
-    ax4.legend(fontsize=9, ncol=2)
-    ax4.grid(True, alpha=0.3)
-    
-    ax5 = fig.add_subplot(2, 3, 5)
-    for ci, mat in enumerate(plot_maturities):
-        if mat in maturities:
-            subset = vol_results[vol_results['time_to_maturity'] == mat].sort_values('strike')
-            lbl = f'{mat:.0f}Y' if mat >= 1 else f'{mat*12:.0f}M'
-            # Market (faint)
-            ax5.plot(subset['strike'] * 100, subset['implied_normal_vol'] * 100,
-                    '-', color=colors[ci], alpha=0.3, lw=1)
-            # Model
-            valid = ~subset[model_vol_col].isna()
-            ax5.plot(subset.loc[valid, 'strike'] * 100, subset.loc[valid, model_vol_col] * 100,
-                    's-', color=colors[ci], ms=3, lw=2, label=f'{lbl}')
-            # Forward line
-            if fwd_interp is not None:
-                fwd = float(fwd_interp(mat)) * 100
-                ax5.axvline(fwd, color=colors[ci], ls=':', alpha=0.3, lw=0.8)
-    ax5.set_xlabel('Strike (%)', fontsize=11)
-    ax5.set_ylabel('Implied Vol (%)', fontsize=11)
-    ax5.set_title(f'{version_name.upper()} Model vs Market (faint)', fontsize=12, fontweight='bold')
-    ax5.legend(fontsize=9, ncol=2)
-    ax5.grid(True, alpha=0.3)
-    
-    ax6 = fig.add_subplot(2, 3, 6)
-    for ci, mat in enumerate(plot_maturities):
-        if mat in maturities:
-            subset = vol_results[vol_results['time_to_maturity'] == mat].sort_values('strike')
-            lbl = f'{mat:.0f}Y' if mat >= 1 else f'{mat*12:.0f}M'
-            valid = ~subset[error_col].isna()
-            ax6.plot(subset.loc[valid, 'strike'] * 100, subset.loc[valid, error_col] * 100,
-                    '^-', color=colors[ci], ms=3, lw=1.5, label=f'{lbl} Error')
-    ax6.axhline(0, color='black', linestyle='--', linewidth=1, alpha=0.5)
-    ax6.set_xlabel('Strike (%)', fontsize=11)
-    ax6.set_ylabel('Vol Error (%)', fontsize=11)
-    ax6.set_title(f'{version_name.upper()} - Market Error', fontsize=12, fontweight='bold')
-    ax6.legend(fontsize=9, ncol=2)
-    ax6.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.show()
+    strikes_u  = sorted(vol_results['strike'].unique())
+    n_K, n_T   = len(strikes_u), len(maturities)
+
+    mkt_grid = np.full((n_K, n_T), np.nan)
+    mdl_grid = np.full((n_K, n_T), np.nan)
+    err_grid = np.full((n_K, n_T), np.nan)
+
+    for ki, k in enumerate(strikes_u):
+        for ti, t in enumerate(maturities):
+            row = vol_results[
+                (vol_results['time_to_maturity'] == t) &
+                (vol_results['strike'] == k)
+            ]
+            if len(row) == 0:
+                continue
+            mkt_v = row['implied_normal_vol'].values[0]
+            mdl_v = row[model_col].values[0]
+            err_v = row[error_col].values[0]
+
+            mkt_grid[ki, ti] = mkt_v * 100
+            if not np.isnan(mdl_v):
+                mdl_grid[ki, ti] = mdl_v * 100
+            if not np.isnan(err_v):
+                err_grid[ki, ti] = err_v * 100
+
+    # nearest-neighbour fill for model NaN holes (visual only)
+    nan_mask = np.isnan(mdl_grid)
+    if nan_mask.any() and (~nan_mask).any():
+        _, idx = distance_transform_edt(nan_mask, return_indices=True)
+        mdl_display = mdl_grid.copy()
+        mdl_display[nan_mask] = mdl_grid[tuple(idx[:, nan_mask])]
+    else:
+        mdl_display = mdl_grid.copy()
+
+    K_pct = np.array(strikes_u) * 100
+
+    z_lo = float(np.nanmin([mkt_grid, mdl_display])) * 0.95
+    z_hi = float(np.nanmax([mkt_grid, mdl_display])) * 1.05
+
+    err_vals = err_grid[~np.isnan(err_grid)]
+    err_abs  = float(np.quantile(np.abs(err_vals), 0.95)) if len(err_vals) else 1.0
+    err_abs  = max(err_abs, 0.01)
+
+    # ---- Figure 1: overlaid 3D surfaces ----
+    common = dict(x=maturities, y=K_pct,
+                  showscale=True,
+                  contours=dict(z=dict(show=False)),
+                  lighting=dict(ambient=0.75, diffuse=0.6))
+
+    fig = go.Figure()
+    fig.add_trace(go.Surface(
+        z=mkt_grid,
+        colorscale='Blues',
+        cmin=z_lo, cmax=z_hi,
+        opacity=0.85,
+        name='Market',
+        hovertemplate='T=%{x:.2f}Y<br>K=%{y:.2f}%<br>Market σ=%{z:.3f}%<extra>Market</extra>',
+        colorbar=dict(x=0.85, thickness=14, title='σ (%)'),
+        **common,
+    ))
+    fig.add_trace(go.Surface(
+        z=mdl_display,
+        colorscale='Oranges',
+        cmin=z_lo, cmax=z_hi,
+        opacity=0.70,
+        name=version_name,
+        hovertemplate=f'T=%{{x:.2f}}Y<br>K=%{{y:.2f}}%<br>{version_name} σ=%{{z:.3f}}%'
+                      f'<extra>{version_name}</extra>',
+        colorbar=dict(x=1.0, thickness=14, title='σ (%)'),
+        **common,
+    ))
+    fig.update_layout(
+        title=dict(text=f'Market (blue) vs {version_name.upper()} Model (orange) — Caplet Vol Surface',
+                   font=dict(size=15)),
+        scene=dict(
+            xaxis_title='Maturity (Y)',
+            yaxis_title='Strike (%)',
+            zaxis_title='σ (%)',
+            camera=dict(eye=dict(x=1.6, y=-1.6, z=0.8)),
+            aspectmode='auto',
+            dragmode='orbit',
+        ),
+        height=750,
+        margin=dict(l=0, r=0, t=50, b=0),
+        template='plotly_dark',
+        legend=dict(x=0.02, y=0.98),
+    )
+    # ---- Figure 2: 2D error heatmap ----
+    err_bps = err_grid * 100          # vol-% → bps
+    fig2 = go.Figure(go.Heatmap(
+        z=err_bps,
+        x=maturities,
+        y=K_pct,
+        colorscale='RdBu_r',
+        zmid=0,
+        zmin=-err_abs * 100,
+        zmax=err_abs * 100,
+        hovertemplate='T=%{x:.2f}Y<br>K=%{y:.2f}%<br>Δσ=%{z:+.1f}bp<extra></extra>',
+        colorbar=dict(title='Δσ (bps)'),
+    ))
+    fig2.update_layout(
+        title=f'Vol Error — {version_name.upper()} minus Market (bps)',
+        xaxis_title='Maturity (Y)',
+        yaxis_title='Strike (%)',
+        height=420,
+        template='plotly_dark',
+    )
+
+    cfg = dict(scrollZoom=False, displayModeBar=True)
+    if open_browser:
+        # Standalone HTML — full unobstructed WebGL rotation (no notebook iframe)
+        import tempfile, webbrowser, pathlib
+        html = fig.to_html(full_html=False, include_plotlyjs='cdn', config=cfg)
+        html += fig2.to_html(full_html=False, include_plotlyjs=False, config=cfg)
+        out = pathlib.Path(tempfile.gettempdir()) / f'vol_surface_{version_name}.html'
+        out.write_text(f'<html><head><meta charset="utf-8"></head><body>{html}</body></html>',
+                       encoding='utf-8')
+        webbrowser.open(out.as_uri())
+        print(f'Opened in browser: {out}')
+    else:
+        fig.show(config=cfg)
+        fig2.show(config=cfg)
 
 
-def plot_caplet_price_heatmaps(vol_key_rate, model_pvs, market_pvs, version_name="Model"):
+def plot_smiles_signum(vol_results, version_name="v15",
+                       plot_maturities=None, fwd_key_rate=None,
+                       theme='dark', height=380):
     """
-    Plot heatmaps showing caplet price errors and model PVs.
-    
-    Parameters:
-    -----------
-    vol_key_rate : pd.DataFrame
-        DataFrame with time_to_maturity and strike columns
-    model_pvs : array-like
-        Model caplet prices (in decimal, will be converted to bp)
-    market_pvs : array-like
-        Market caplet prices (in decimal, will be converted to bp)
+    Per-maturity smile charts using Signum (TradingView Lightweight Charts backbone).
+
+    For each maturity in `plot_maturities`, renders one Chart with:
+      - Market smile  (solid line, Viridis colour)
+      - Model smile   (dashed line, same colour, thinner)
+      - Vol error     (baseline chart, green above / red below zero)
+
+    Parameters
+    ----------
+    vol_results : pd.DataFrame
     version_name : str
-        Version identifier for plot titles
+    plot_maturities : list[float] | None  — defaults to all unique maturities
+    fwd_key_rate : pd.DataFrame | None    — unused (kept for API consistency)
+    theme : str                           — 'dark', 'ft', 'midnight', etc.
+    height : int                          — chart height in pixels
     """
-    import numpy as np
-    
-    # Convert to numpy arrays
-    model_pvs = np.array(model_pvs) if hasattr(model_pvs, 'cpu') else np.array(model_pvs)
-    market_pvs = np.array(market_pvs) if hasattr(market_pvs, 'cpu') else np.array(market_pvs)
-    
-    # Build DataFrame
-    caplet_grid = pd.DataFrame({
-        'Maturity': vol_key_rate['time_to_maturity'].values,
-        'Strike': vol_key_rate['strike'].values * 100,  # Convert to %
-        'Model_PV': model_pvs * 10000,  # Convert to bp
-        'Market_PV': market_pvs * 10000,
-        'Diff_bp': (model_pvs - market_pvs) * 10000,
-        'Diff_pct': (model_pvs - market_pvs) / (market_pvs + 1e-10) * 100
-    })
-    
-    # Pivot for heatmaps
-    pivot_diff_pct = caplet_grid.pivot_table(values='Diff_pct', index='Strike', columns='Maturity', aggfunc='mean')
-    pivot_diff_bp = caplet_grid.pivot_table(values='Diff_bp', index='Strike', columns='Maturity', aggfunc='mean')
-    pivot_model = caplet_grid.pivot_table(values='Model_PV', index='Strike', columns='Maturity', aggfunc='mean')
-    
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-    
-    # Plot 1: Percentage error
-    im1 = axes[0].imshow(pivot_diff_pct.values, aspect='auto', cmap='RdBu_r', vmin=-100, vmax=100)
-    axes[0].set_xticks(range(len(pivot_diff_pct.columns)))
-    axes[0].set_xticklabels([f'{x:.1f}Y' for x in pivot_diff_pct.columns], rotation=45)
-    axes[0].set_yticks(range(len(pivot_diff_pct.index)))
-    axes[0].set_yticklabels([f'{x:.1f}%' for x in pivot_diff_pct.index])
-    axes[0].set_xlabel('Maturity')
-    axes[0].set_ylabel('Strike')
-    axes[0].set_title(f'{version_name} Price Error (Model-Market)/Market %')
-    plt.colorbar(im1, ax=axes[0], label='Error %')
-    
-    # Plot 2: Absolute error in bp
-    bp_max = max(abs(np.nanmin(pivot_diff_bp.values)), abs(np.nanmax(pivot_diff_bp.values)))
-    im2 = axes[1].imshow(pivot_diff_bp.values, aspect='auto', cmap='RdBu_r', vmin=-bp_max, vmax=bp_max)
-    axes[1].set_xticks(range(len(pivot_diff_bp.columns)))
-    axes[1].set_xticklabels([f'{x:.1f}Y' for x in pivot_diff_bp.columns], rotation=45)
-    axes[1].set_yticks(range(len(pivot_diff_bp.index)))
-    axes[1].set_yticklabels([f'{x:.1f}%' for x in pivot_diff_bp.index])
-    axes[1].set_xlabel('Maturity')
-    axes[1].set_ylabel('Strike')
-    axes[1].set_title(f'{version_name} Price Error (Model-Market) bp')
-    plt.colorbar(im2, ax=axes[1], label='Error (bp)')
-    
-    # Plot 3: Model PV
-    im3 = axes[2].imshow(pivot_model.values, aspect='auto', cmap='viridis')
-    axes[2].set_xticks(range(len(pivot_model.columns)))
-    axes[2].set_xticklabels([f'{x:.1f}Y' for x in pivot_model.columns], rotation=45)
-    axes[2].set_yticks(range(len(pivot_model.index)))
-    axes[2].set_yticklabels([f'{x:.1f}%' for x in pivot_model.index])
-    axes[2].set_xlabel('Maturity')
-    axes[2].set_ylabel('Strike')
-    axes[2].set_title(f'{version_name} Model PV (bp)')
-    plt.colorbar(im3, ax=axes[2], label='PV (bp)')
-    
-    plt.tight_layout()
-    plt.show()
-    
-    # Print summary
-    rmse_bp = np.sqrt(np.mean(caplet_grid['Diff_bp']**2))
-    mae_bp = np.mean(np.abs(caplet_grid['Diff_bp']))
-    print(f"\n{version_name} Price Fit Summary:")
-    print(f"  RMSE: {rmse_bp:.2f} bp")
-    print(f"  MAE:  {mae_bp:.2f} bp")
-    print(f"  Model range: {caplet_grid['Model_PV'].min():.2f} - {caplet_grid['Model_PV'].max():.2f} bp")
-    print(f"  Market range: {caplet_grid['Market_PV'].min():.2f} - {caplet_grid['Market_PV'].max():.2f} bp")
+    try:
+        from signum import Chart, Dashboard
+    except ImportError:
+        print("signum not installed — pip install git+https://github.com/SugoiKitsune/signum")
+        return
+
+    model_col = f'model_vol_{version_name}'
+    error_col  = f'vol_error_{version_name}'
+
+    all_mats = sorted(vol_results['time_to_maturity'].unique())
+    if plot_maturities is None:
+        plot_maturities = all_mats
+    mats_to_show = [m for m in plot_maturities if m in all_mats]
+
+    # colour palette — one per maturity
+    import matplotlib as mpl
+    cmap = mpl.colormaps['tab10']
+    palette = ['#' + ''.join(f'{int(c*255):02x}' for c in cmap(i)[:3])
+               for i in np.linspace(0, 0.9, len(mats_to_show))]
+
+    panes = []
+    titles = []
+
+    for ci, mat in enumerate(mats_to_show):
+        subset = (vol_results[vol_results['time_to_maturity'] == mat]
+                  .sort_values('strike').copy())
+
+        lbl = f'{mat:.0f}Y' if mat >= 1 else f'{int(mat*12)}M'
+        colour = palette[ci % len(palette)]
+
+        # Signum .line() expects DataFrame with 'time' and 'value' columns.
+        # We repurpose 'time' as strike (float, monotonically increasing) — fine for LWC.
+        strikes_pct = subset['strike'].values * 100
+
+        mkt_df = pd.DataFrame({
+            'time':  strikes_pct,
+            'value': subset['implied_normal_vol'].values * 100,
+        })
+        valid_mdl = ~subset[model_col].isna()
+        mdl_df = pd.DataFrame({
+            'time':  strikes_pct[valid_mdl.values],
+            'value': subset.loc[valid_mdl, model_col].values * 100,
+        })
+
+        # vol error for baseline chart (green / red centred at 0)
+        valid_err = ~subset[error_col].isna()
+        err_df = pd.DataFrame({
+            'time':  strikes_pct[valid_err.values],
+            'value': subset.loc[valid_err, error_col].values * 100,
+        })
+
+        smile_chart = (
+            Chart(theme=theme, height=height, watermark=lbl)
+            .line(mkt_df,  name=f'Market {lbl}',       color=colour,  width=2)
+            .line(mdl_df,  name=f'{version_name} {lbl}', color=colour, width=1)
+        )
+        err_chart = (
+            Chart(theme=theme, height=max(height // 3, 120))
+            .baseline(err_df, base_value=0, name=f'Δσ {lbl}')
+        )
+
+        panes.extend([smile_chart, err_chart])
+        titles.extend([f'Vol Smile — {lbl}', f'Error (model−mkt)'])
+
+    dash = Dashboard(panes=panes, titles=titles)
+    return dash
 
 
 def print_model_vs_market_table(vol_key_rate, fwd_key_rate, model_pvs, market_pvs, 
@@ -1217,153 +1093,50 @@ def print_model_vs_market_table(vol_key_rate, fwd_key_rate, model_pvs, market_pv
 
 
 # =============================================================================
-# HW-HESTON SIMULATION & PRICING
+# PARAMETER SUMMARY & CONVERGENCE DIAGNOSTICS
 # =============================================================================
 
-def fast_cir_paths(n_paths, n_steps, dt, v0, kappa, theta_vec, epsilon, device, randn=None):
-    """CIR variance via Euler-Maruyama with reflection."""
-    v = torch.zeros((n_paths, n_steps + 1), dtype=torch.float32, device=device)
-    v[:, 0] = v0
-    sqrt_dt = np.sqrt(dt)
-    if randn is None:
-        randn = torch.randn(n_paths, n_steps, device=device)
-    for i in range(n_steps):
-        v_curr = v[:, i]
-        theta_i = theta_vec[i] if theta_vec.dim() > 0 else theta_vec
-        drift = kappa * (theta_i - v_curr) * dt
-        diffusion = epsilon * torch.sqrt(torch.clamp(v_curr, min=1e-8)) * sqrt_dt * randn[:, i]
-        v[:, i+1] = torch.abs(v_curr + drift + diffusion)
-    return v
-
-
-def fast_ou_paths(n_paths, n_steps, dt, x0, lam, vol_paths, device, randn=None):
-    """Hull-White OU process with stochastic vol."""
-    x = torch.zeros((n_paths, n_steps + 1), dtype=torch.float32, device=device)
-    x[:, 0] = x0
-    sqrt_dt = np.sqrt(dt)
-    exp_lam_dt = np.exp(-lam * dt)
-    if randn is None:
-        randn = torch.randn(n_paths, n_steps, device=device)
-    for i in range(n_steps):
-        x[:, i+1] = x[:, i] * exp_lam_dt + torch.sqrt(torch.clamp(vol_paths[:, i], min=1e-9)) * sqrt_dt * randn[:, i]
-    return x
-
-
-def fast_hw_paths(n_paths, n_steps, dt, x0, gamma, xi, device, randn=None):
-    """Vectorized OU spread process with constant vol.
+def params_to_dataframe(best_params, theta_nodes=None):
+    """Build a single summary DataFrame from best_params dict.
     
-    Exact OU transition via geometric weighted cumsum (no Python loop).
+    Returns DataFrame with columns: Parameter, Value, Extra.
+    Extra contains half-life for kappa, sqrt(theta)% for theta nodes, etc.
     """
-    exp_gamma_dt = np.exp(-gamma * dt)
-    var_factor = float(xi * xi * (1 - np.exp(-2 * gamma * dt)) / (2 * gamma + 1e-8))
-    std_factor = np.sqrt(max(var_factor, 1e-12))
-    if randn is None:
-        randn = torch.randn(n_paths, n_steps, device=device)
-    rho = exp_gamma_dt
-    w = std_factor * randn
-    j_idx = torch.arange(n_steps, device=device, dtype=torch.float32)
-    rho_powers = rho ** j_idx
-    inv_rho_powers = 1.0 / (rho_powers + 1e-30)
-    scaled = w * inv_rho_powers.unsqueeze(0)
-    cum_scaled = scaled.cumsum(dim=1)
-    k_steps = cum_scaled * rho_powers.unsqueeze(0)
-    rho_powers_1 = rho ** (j_idx + 1)
-    k_steps = k_steps + x0 * rho_powers_1.unsqueeze(0)
-    k0 = torch.full((n_paths, 1), x0, dtype=torch.float32, device=device)
-    return torch.cat([k0, k_steps], dim=1)
-
-
-def rho_to_vec(rho_nodes, rho_times, timeline):
-    """Interpolate rho nodes to timeline via piecewise linear."""
-    t = timeline[:-1]
-    rho_vec = torch.zeros_like(t)
-    for i in range(len(rho_times)):
-        if i == 0:
-            mask = t <= rho_times[i]
-            rho_vec[mask] = rho_nodes[i]
-        else:
-            mask = (t > rho_times[i-1]) & (t <= rho_times[i])
-            frac = (t[mask] - rho_times[i-1]) / (rho_times[i] - rho_times[i-1])
-            rho_vec[mask] = rho_nodes[i-1] + frac * (rho_nodes[i] - rho_nodes[i-1])
-    rho_vec[t > rho_times[-1]] = rho_nodes[-1]
-    return rho_vec
-
-
-def theta_to_vec(theta_vals, theta_nodes, timeline):
-    """Interpolate theta nodes to full timeline via PCHIP spline."""
-    spline = PchipSpline1D(theta_nodes, theta_vals)
-    return spline.evaluate(timeline)
-
-
-def fast_simulate(n_paths, timeline, theta_vec, epsilon, v0, kappa, lam, gamma, xi,
-                  f_key_vec, f_ois_vec, device, seed=None, rho_vx=0.0, antithetic=False):
-    """Combined HW-Heston simulation with Cholesky correlation and antithetic variates.
-    
-    Correlation structure:
-        W_v = Z_v                                    (CIR variance)
-        W_x = rho(t) * Z_v + sqrt(1-rho(t)^2) * Z_x (OU rate, correlated with vol)
-        W_k = Z_k                                    (HW spread, independent)
-    
-    Returns:
-        key_rate_paths: [n_paths, n_steps+1]
-        ois_rate_paths: [n_paths, n_steps+1]
-        v_paths: [n_paths, n_steps+1]
-    """
-    n_steps = len(timeline) - 1
-    dt = (timeline[1] - timeline[0]).item()
-    if seed is not None:
-        torch.manual_seed(seed)
-    if antithetic:
-        half = n_paths // 2
-        Z_v_h = torch.randn(half, n_steps, device=device)
-        Z_x_h = torch.randn(half, n_steps, device=device)
-        Z_k_h = torch.randn(half, n_steps, device=device)
-        Z_v = torch.cat([Z_v_h, -Z_v_h], dim=0)
-        Z_x = torch.cat([Z_x_h, -Z_x_h], dim=0)
-        Z_k = torch.cat([Z_k_h, -Z_k_h], dim=0)
-        n_paths = 2 * half
+    _v = lambda x: x.item() if hasattr(x, 'item') else float(x)
+    rows = []
+    theta = best_params['theta']
+    # Support 6-node (legacy) and 8-node (current) theta interpolation
+    _default_labels_6 = ['3M', '6M', '1Y', '3Y', '5Y', '10Y']
+    _default_labels_8 = ['1M', '2M', '3M', '6M', '1Y', '3Y', '5Y', '10Y']
+    if theta_nodes is not None:
+        n = len(theta_nodes)
     else:
-        Z_v = torch.randn(n_paths, n_steps, device=device)
-        Z_x = torch.randn(n_paths, n_steps, device=device)
-        Z_k = torch.randn(n_paths, n_steps, device=device)
-    randn_v = Z_v
-    if isinstance(rho_vx, torch.Tensor) and rho_vx.dim() >= 1:
-        rho_t = rho_vx.unsqueeze(0)
-        randn_x = rho_t * Z_v + torch.sqrt(torch.clamp(1.0 - rho_t**2, min=0.0)) * Z_x
+        n = len(theta)
+    if n == 8:
+        labels = _default_labels_8
+        nodes = theta_nodes if theta_nodes is not None else [0.0833, 0.1667, 0.25, 0.5, 1.0, 3.0, 5.0, 10.0]
     else:
-        rho_val = rho_vx.item() if isinstance(rho_vx, torch.Tensor) else float(rho_vx)
-        randn_x = rho_val * Z_v + np.sqrt(max(1.0 - rho_val**2, 0.0)) * Z_x
-    randn_k = Z_k
-    v_paths = fast_cir_paths(n_paths, n_steps, dt, v0, kappa, theta_vec, epsilon, device, randn_v)
-    x_paths = fast_ou_paths(n_paths, n_steps, dt, 0.0, lam, v_paths, device, randn_x)
-    ks_paths = fast_hw_paths(n_paths, n_steps, dt, 0.0, gamma, xi, device, randn_k)
-    key_paths = f_key_vec.unsqueeze(0) + x_paths + ks_paths
-    ois_paths = f_ois_vec.unsqueeze(0) + x_paths
-    return key_paths, ois_paths, v_paths
-
-
-def batch_price_caplets(key_paths, ois_paths, timeline, idx_fixes, idx_pays, strikes, tau, device):
-    """T-forward measure pricing of now-starting average rate caplets.
-    
-    Returns (pvs, F_model, P_model):
-        pvs     = E[disc * payoff]                   (money-market PV)
-        P_model = E[exp(-int_0^T r ds)]              (model ZCB per caplet)
-        F_model = E[disc * (int a dt/T)] / E[disc]   (T-forward measure forward)
-    
-    Bachelier inversion with (F_model, P_model) guarantees undiscounted >= intrinsic
-    by Jensen's inequality: E^T[max(a_bar-K,0)] >= max(E^T[a_bar]-K,0) = max(F_model-K,0).
-    """
-    dt_val = (timeline[1] - timeline[0]).item()
-    sum_key_dt = (key_paths[:, :-1] * dt_val).cumsum(dim=1)
-    sum_ois_dt = (ois_paths[:, :-1] * dt_val).cumsum(dim=1)
-    i_idx = (idx_fixes - 1).clamp(0, sum_key_dt.shape[1] - 1).long()
-    sum_key_T = sum_key_dt[:, i_idx]
-    sum_ois_T = sum_ois_dt[:, i_idx]
-    T_vals = timeline[idx_fixes]
-    disc = torch.exp(-sum_ois_T)
-    payoff = torch.clamp(sum_key_T - T_vals.unsqueeze(0) * strikes.unsqueeze(0), min=0)
-    pvs = (payoff * disc).mean(dim=0)
-    P_model = disc.mean(dim=0)
-    avg_rate = sum_key_T / T_vals.unsqueeze(0)
-    F_model = (disc * avg_rate).mean(dim=0) / P_model
-    return pvs, F_model, P_model
+        labels = _default_labels_6
+        nodes = theta_nodes if theta_nodes is not None else [0.25, 0.5, 1.0, 3.0, 5.0, 10.0]
+    if 'v0' in best_params:
+        v0_val = _v(best_params['v0'])
+        rows.append(('v₀', f'{v0_val:.6f}', f'√v₀={np.sqrt(v0_val)*100:.2f}%'))
+    for i, lbl in enumerate(labels):
+        tv = _v(theta[i])
+        rows.append((f'θ({lbl})', f'{tv:.6f}', f'√θ={np.sqrt(tv)*100:.2f}%'))
+    kf = _v(best_params['kappa_fast'])
+    ks = _v(best_params['kappa_slow'])
+    rows.append(('κ_fast', f'{kf:.4f}', f'hl={np.log(2)/kf:.2f}Y'))
+    rows.append(('κ_slow', f'{ks:.4f}', f'hl={np.log(2)/ks:.2f}Y'))
+    rows.append(('w_fast', f'{_v(best_params["w_fast"]):.4f}', ''))
+    eps = _v(best_params['epsilon'])
+    rows.append(('ε', f'{eps:.4f}', f'ε²={eps**2:.5f}'))
+    rows.append(('λ', f'{_v(best_params["lam"]):.4f}', ''))
+    rows.append(('γ', f'{_v(best_params["gamma"]):.4f}', ''))
+    rows.append(('ξ', f'{_v(best_params["xi"]):.6f}', ''))
+    if 'rho_3m' in best_params:
+        rows.append(('ρ(3M)', f'{_v(best_params.get("rho_3m", 0)):+.4f}', ''))
+    rows.append(('ρ(1Y)', f'{_v(best_params.get("rho_1y", 0)):+.4f}', ''))
+    rows.append(('ρ(5Y)', f'{_v(best_params.get("rho_5y", 0)):+.4f}', ''))
+    rows.append(('ρ(10Y)', f'{_v(best_params.get("rho_10y", 0)):+.4f}', ''))
+    return pd.DataFrame(rows, columns=['Parameter', 'Value', 'Extra'])

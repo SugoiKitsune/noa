@@ -34,12 +34,40 @@ data/
 tmp*
 *.numbers
 
-# Local-only folders (reports, archives, RAG)
-docs/quant/affine_calibration/Final report/
-docs/quant/affine_calibration/Initial report/
+# Local-only folders (RAG, old archive)
 docs/quant/affine_calibration/archive/
-docs/quant/affine_calibration/multi_theta/archive/
 docs/quant/affine_calibration/rag/
+
+# LaTeX build artifacts (keep .tex, .bib, .pdf, graphics)
+*.aux
+*.log
+*.out
+*.synctex.gz
+*.bcf
+*.run.xml
+*.bbl
+*.blg
+*.toc
+
+# Calibration artifacts — local-only (large binaries, experiment logs, old checkpoints)
+# Old location — fully ignored (superseded by runs/calibration_weights/)
+docs/quant/affine_calibration/multi_theta/calibration_weights/
+docs/quant/affine_calibration/multi_theta/calibration_history/
+docs/quant/affine_calibration/multi_theta/archive/
+docs/quant/affine_calibration/multi_theta/theory/
+
+# Images — generated plots, not tracked in git
+docs/quant/affine_calibration/multi_theta/images/
+
+# Canonical checkpoint store — local-only by default
+# Use `git add -f <file>` to force-include selected checkpoints for publication
+docs/quant/affine_calibration/multi_theta/runs/calibration_weights/*.pkl
+docs/quant/affine_calibration/multi_theta/runs/calibration_weights/*.csv
+
+# Scratch/debug files
+docs/quant/affine_calibration/multi_theta/_cell9.txt
+docs/quant/affine_calibration/multi_theta/check_csv.py
+docs/quant/affine_calibration/multi_theta/eval_check.py
 
 # Scratch files
 temp_original.ipynb
