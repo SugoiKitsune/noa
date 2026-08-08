@@ -64,6 +64,16 @@ docs/quant/affine_calibration/multi_theta/images/
 docs/quant/affine_calibration/multi_theta/runs/calibration_weights/*.pkl
 docs/quant/affine_calibration/multi_theta/runs/calibration_weights/*.csv
 
+# DM calibration (Risk article) — heavy artifacts local-only; `git add -f` finals for publication
+docs/quant/affine_calibration/dm_calibration/runs/calibration_weights/
+docs/quant/affine_calibration/dm_calibration/runs/**/*.pkl
+docs/quant/affine_calibration/dm_calibration/figures/
+# per-caplet results/history hold Bloomberg-derived vol quotes — keep out of git
+docs/quant/affine_calibration/dm_calibration/runs/*.csv
+docs/quant/affine_calibration/dm_calibration/runs/*.json
+# article data store: derived .md/.json ARE committed; copied figure images are not
+docs/quant/affine_calibration/dm_calibration/article/results/figures/
+
 # Scratch/debug files
 docs/quant/affine_calibration/multi_theta/_cell9.txt
 docs/quant/affine_calibration/multi_theta/check_csv.py
@@ -79,3 +89,9 @@ test_torch.py
 docs/cfd/stash/*
 !docs/cfd/stash/*.gif
 !docs/cfd/stash/*.png
+
+# DM article: LaTeX build artifacts + editor live-preview temp (regenerable from .tex)
+docs/quant/affine_calibration/dm_calibration/**/*.pdf
+docs/quant/affine_calibration/dm_calibration/**/*.aux
+docs/quant/affine_calibration/dm_calibration/**/*.synctex.gz
+docs/quant/affine_calibration/dm_calibration/**/live.main.*

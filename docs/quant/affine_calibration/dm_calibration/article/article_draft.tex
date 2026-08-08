@@ -1,0 +1,827 @@
+\documentclass[11pt]{article}
+
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{natbib}
+\usepackage{microtype}
+\usepackage[hidelinks]{hyperref}
+
+% ---------------------------------------------------------------------------
+% Placeholder macro for results not yet computed (visible in the compiled PDF).
+% ---------------------------------------------------------------------------
+\newcommand{\TODO}[1]{\textbf{[TODO: #1]}}
+
+% ---------------------------------------------------------------------------
+% Notation shortcuts.
+% ---------------------------------------------------------------------------
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\Qmeas}{\mathbb{Q}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\ois}{\mathrm{ois}}
+\newcommand{\key}{\mathrm{key}}
+\newcommand{\dd}{\,\mathrm{d}}
+\newcommand{\Fwd}{F}
+\newcommand{\Nvol}{\sigma_{\mathrm N}}
+\newcommand{\Nmkt}{\sigma^{\mathrm{mkt}}}
+\newcommand{\Nmdl}{\sigma^{\mathrm{mdl}}}
+
+\theoremstyle{plain}
+\newtheorem{proposition}{Proposition}
+\theoremstyle{definition}
+\newtheorem{remark}{Remark}
+
+\title{\bfseries A multi-curve affine stochastic-volatility model for
+RFR caplet surfaces: calibration and hard no-arbitrage projection}
+
+\author{Andrey Popov \and Roland Grinis\thanks{Draft manuscript prepared for
+\emph{Risk} (Cutting Edge). Corresponding author: andreykitsune@gmail.com.
+Market data sourced from Bloomberg (VCUB caplet volatilities and ICVS curves,
+as of 30 June 2026); redistribution of the raw data is not permitted.}}
+
+\date{This draft: \today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+We develop and calibrate a multi-curve affine stochastic-volatility short-rate
+model for the normal-implied-volatility surface of per-period RFR and IBOR
+caplets. The starting point is a structural observation, stated as a
+proposition and independent of any particular market: a single-factor Gaussian
+short-rate model implies a strike-independent Bachelier smile, so reproducing a
+non-flat smile \emph{requires} stochastic volatility. We meet this requirement
+with a two-factor lifted-CIR Hull--White--Heston specification with an
+Ornstein--Uhlenbeck basis factor, and we position it explicitly as a
+finite-dimensional affine realization of the Heath--Jarrow--Morton multi-curve
+framework. Calibration combines a composite normal-volatility objective, a
+zeroth-order Adam--SPSA optimiser robust to Monte Carlo noise, GPU-vectorised
+simulation, and a hard projection onto the static no-arbitrage cone by pool
+adjacent violators. We report the calibration protocol and an empirical
+programme on EUR, GBP and USD surfaces as of 30~June~2026, including a
+nested-model hierarchy that isolates the marginal contribution of each
+modelling ingredient.
+\end{abstract}
+
+% ===========================================================================
+\section{Motivation}
+% ===========================================================================
+
+The transition from IBOR-style term rates to overnight risk-free rates (RFRs),
+together with the entrenchment of multi-curve discounting, has reshaped the
+interest-rate modelling problem. Three structural facts now organise any
+serious specification. First, discounting and forwarding are distinct: a single
+yield curve can no longer serve both, and OIS (collateral) discounting must be
+separated from the projection of the payoff-relevant index
+\citep{Henrard2014,GrbacRunggaldier2016}. Second, RFR benchmarks are
+backward-looking averages of an overnight rate, so caplet payoffs depend on a
+compounded or averaged rate that is only known at the end of the accrual period,
+and central-bank meetings inject scheduled, jump-like behaviour into the
+policy-linked component \citep{FGGS2020,FGS2023}. Third, the option-implied
+volatility surfaces of these markets display pronounced smile and skew that a
+classical one-factor Gaussian short-rate model cannot reproduce.
+
+This last point is not a calibration inconvenience but a structural
+impossibility, and it is the analytical hook of the paper. If the
+payoff-relevant rate is an affine function of a Gaussian factor---as it is in
+any single-factor Hull--White model, however elaborate its deterministic
+volatility or mean-reversion term structure---then the caplet is priced by the
+Bachelier formula with a \emph{single} normal volatility that does not depend on
+the strike. The model-implied smile is therefore flat by construction. We make
+this precise as Proposition~\ref{prop:flat} below. Its practical corollary is a
+warning against a common modelling error: one cannot manufacture strike
+curvature by over-parametrising a Gaussian model in time. A smile is evidence of
+stochastic volatility, and it must be modelled as such.
+
+We take three deliberate steps in response, and they order the paper. (i) We
+adopt a two-factor lifted-CIR Hull--White--Heston (HWH) specification with an
+Ornstein--Uhlenbeck (OU) basis factor for the OIS/key-rate spread; the Heston
+variance is the minimal economically meaningful ingredient that generates the
+smile, and the ``lifting'' of the CIR variance into two Markovian factors
+\citep{AbiJaber2019} adds term-structure flexibility at negligible cost. (ii) We
+position the finite-dimensional short-rate construction inside the
+Heath--Jarrow--Morton (HJM) multi-curve framework of
+\citet{CFG2016,CFG2019}, stating which forward-rate dynamics the short-rate
+factors imply and which no-arbitrage drift restrictions are inherited. (iii) We
+treat static no-arbitrage of the fitted surface as a first-class constraint,
+combining soft penalties during calibration with a hard projection onto the
+butterfly/calendar cone by the pool-adjacent-violators algorithm (PAVA).
+
+The computational machinery---GPU-vectorised Monte Carlo pricing and a
+zeroth-order Adam--SPSA optimiser---is what makes the chosen model calibratable
+against a noisy, non-smooth objective. We describe it in full, but we do not
+present it as a separate theoretical contribution: its role is to enable the
+model, not to be the model \citep{Savine2020,CapriottiGiles2024}. The empirical
+programme is developed on EUR (a genuine dual-curve case, ESTR discounting with
+6M EURIBOR projection), with GBP (SONIA, single-curve) and USD (SOFR discounting
+with a Fed Funds ``policy'' curve and a market-quoted basis) as robustness
+checks, all as of 30~June~2026.
+
+% ===========================================================================
+\section{The multi-curve affine model and its HJM positioning}
+% ===========================================================================
+
+\subsection{State dynamics}
+
+The model carries a four-dimensional Markov state $(x_t, k_t, V^1_t, V^2_t)$
+under the risk-neutral measure $\Qmeas$. Two Heston/CIR variance factors drive
+a common stochastic volatility; a Hull--White factor $x$ drives the level of the
+risk-free short rate; an OU factor $k$ drives the basis between the risk-free
+(OIS) curve and the key/policy curve:
+\begin{align}
+\dd V^i_t &= \kappa_i\bigl(\theta_i(t) - V^i_t\bigr)\dd t
+             + \varepsilon\,\sqrt{V^i_t}\,\dd W^{v_i}_t, \qquad i = 1,2,
+             \label{eq:cir}\\
+V_t &= w\,V^1_t + (1-w)\,V^2_t, \label{eq:varmix}\\
+\dd x_t &= -\lambda\,x_t\,\dd t + \sqrt{V_t}\,\dd W^{x}_t, \label{eq:hw}\\
+\dd k_t &= -\gamma\,k_t\,\dd t + \xi\,\dd W^{k}_t, \label{eq:ou}
+\end{align}
+with instantaneous leverage $\dd\langle W^{x}, W^{v_i}\rangle_t = \rho(t)\dd t$
+between the rate and variance shocks; $W^{k}$ is taken independent of the rate
+and variance drivers. The two forward curves are recovered by deterministic
+shifts that fit the initial term structures exactly:
+\begin{align}
+r^{\ois}_t &= f^{\ois}(t) + x_t, \label{eq:rois}\\
+r^{\key}_t &= f^{\key}(t) + x_t + s_{\mathrm{adj}}(t) + k_t. \label{eq:rkey}
+\end{align}
+Here $f^{\ois}(\cdot)$ and $f^{\key}(\cdot)$ are the initial instantaneous
+forward curves for the OIS and key/policy indices, $s_{\mathrm{adj}}(\cdot)$ is a
+deterministic spread adjustment, and $k_t$ is the stochastic basis. Discounting
+is always done off the OIS curve; the key rate \eqref{eq:rkey} shares the
+risk-free level $x_t$ but carries its own forward $f^{\key}$, deterministic
+adjustment and stochastic basis $k_t$. For USD, $k_t$ is the Fed~Funds--SOFR
+policy basis; for EUR it plays the role of the ESTR--EURIBOR tenor basis; for
+single-curve GBP (SONIA) it is switched off, $\xi = 0$.
+
+The mixture \eqref{eq:varmix} is a two-node Markovian ``lift'' of a CIR variance
+in the sense of \citet{AbiJaber2019}: a sum of ordinary CIR factors with
+distinct mean-reversion speeds $\kappa_1 \neq \kappa_2$ approximates a
+richer---in the limit, fractional---variance kernel while keeping the state
+finite-dimensional and affine. Setting $\varepsilon = 0$ collapses
+\eqref{eq:cir} to a deterministic variance and \eqref{eq:hw} to a Gaussian
+Hull--White factor: the vol-of-vol $\varepsilon$ is precisely the Heston
+ingredient whose absence forces a flat smile (Proposition~\ref{prop:flat}).
+
+The free parameter vector $\Theta$ has 27 components: eight PCHIP spline nodes
+for each of the two variance targets $\theta_1(\cdot), \theta_2(\cdot)$ (16
+nodes), together with 11 scalar and low-dimensional parameters---the mean
+reversions $\lambda, \gamma$, the variance speeds $\kappa_1, \kappa_2$, the
+vol-of-vol $\varepsilon$, the basis volatility $\xi$, the mixing weight $w$, and
+the parameters of the leverage function $\rho(\cdot)$ and spread
+$s_{\mathrm{adj}}(\cdot)$. The targets $\theta_i(t)$ and the correlation
+$\rho(t)$ are represented by shape-preserving PCHIP splines, which keeps the
+implied volatility term structure smooth without introducing spurious
+oscillation.
+
+\subsection{The Gaussian impossibility result}
+
+The following statement is market-independent: it survives the move from the
+Russian key-rate market of the original thesis to the developed-market surfaces
+studied here, because it is a statement about the Gaussian model class, not about
+any dataset.
+
+\begin{proposition}[Flat Bachelier smile under Gaussian dynamics]
+\label{prop:flat}
+Fix a caplet on a period rate $A$ over $[T_{\mathrm{fix}},
+T_{\mathrm{fix}}+\tau]$ settled at $T_{\mathrm{pay}}$, with time-$0$ value
+$V_0(T,K) = D(T_{\mathrm{pay}})\,\tau\,\E^{\Qmeas^{T_{\mathrm{pay}}}}
+[(A-K)^+]$ under the $T_{\mathrm{pay}}$-forward measure. Suppose $A$ is, under
+$\Qmeas^{T_{\mathrm{pay}}}$, an affine function of a Gaussian process---as it is
+whenever $\varepsilon = 0$ in \eqref{eq:cir}--\eqref{eq:rkey}, i.e.\ in any
+single-factor Gaussian Hull--White model with deterministic (possibly
+time-dependent) volatility and mean reversion. Then $A \sim
+\mathcal{N}(\Fwd, s^2)$ with $\Fwd = \E^{\Qmeas^{T_{\mathrm{pay}}}}[A]$ and a
+strike-independent variance $s^2$, and
+\begin{equation}
+\E^{\Qmeas^{T_{\mathrm{pay}}}}[(A-K)^+]
+   = s\,\phi\!\Bigl(\tfrac{\Fwd-K}{s}\Bigr)
+   + (\Fwd-K)\,\Phi\!\Bigl(\tfrac{\Fwd-K}{s}\Bigr),
+\label{eq:bachelier}
+\end{equation}
+which is the Bachelier price with normal volatility $\Nvol = s/\sqrt{t}$ for the
+relevant expiry $t$. The implied normal volatility $K \mapsto \Nvol(K)$ is
+therefore constant in $K$: the model-implied smile is flat. Consequently no
+choice of deterministic volatility or mean-reversion term structure inside the
+Gaussian class reproduces a non-flat normal-volatility smile; strike curvature
+requires the conditional variance of $A$ to be stochastic, i.e.\ $\varepsilon
+> 0$.
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+Under $\Qmeas^{T_{\mathrm{pay}}}$ the state $x$ in \eqref{eq:hw} with
+$\varepsilon=0$ is a Gaussian Ornstein--Uhlenbeck process, so any affine
+functional $A$ of its path is Gaussian with a variance $s^2$ determined by the
+(deterministic) integrated volatility and the payoff averaging, and in
+particular independent of the strike $K$. Evaluating $\E[(A-K)^+]$ for
+$A\sim\mathcal N(\Fwd,s^2)$ gives \eqref{eq:bachelier}. Matching to the Bachelier
+functional form identifies a unique $\Nvol$ through $s = \Nvol\sqrt{t}$, the same
+$s$ for every $K$; hence $\Nvol(K)$ is constant. The final claim follows because
+strike dependence of $\Nvol$ requires the conditional law of $A$ to be
+non-Gaussian, which \eqref{eq:cir}--\eqref{eq:hw} deliver only for
+$\varepsilon>0$ through the mixing over the stochastic variance path.
+\end{proof}
+
+Proposition~\ref{prop:flat} motivates stochastic volatility as a
+\emph{necessary} ingredient rather than an optional refinement, and it justifies
+the minimal-extension philosophy of the model: we add exactly the degrees of
+freedom---a stochastic, leverage-correlated variance---needed to break the
+Gaussian degeneracy, and no more.
+
+\subsection{Positioning in the HJM multi-curve framework}
+
+A finite-dimensional short-rate model is best understood not as a computational
+shortcut but as a tractable realization of a no-arbitrage HJM term-structure
+model \citep{ChiarellaKwon2003}. We make the reduction explicit.
+
+\paragraph{Implied OIS forward dynamics.}
+Because $(x, V^1, V^2)$ is an affine process, the OIS bond price is
+exponential-affine in the state,
+\begin{equation}
+P^{\ois}(t,T) = \exp\!\Bigl(-\!\int_t^T\! f^{\ois}(u)\dd u
+   \;-\; B(t,T)\,x_t \;-\; \Gamma(t,T;V_t)\Bigr),
+   \qquad
+   B(t,T) = \frac{1-e^{-\lambda(T-t)}}{\lambda},
+\label{eq:bond}
+\end{equation}
+where $\Gamma$ solves the variance Riccati system associated with the affine
+generator of \eqref{eq:cir}--\eqref{eq:hw} and $\Gamma(t,T;0)$ recovers the
+deterministic-volatility Hull--White convexity term. Differentiating
+$f^{\ois}(t,T) = -\partial_T \log P^{\ois}(t,T)$ shows that the model is an HJM
+model with a stochastic, separable instantaneous-forward volatility
+\begin{equation}
+\Sigma^{\ois}(t,T) = \sqrt{V_t}\;e^{-\lambda(T-t)},
+\label{eq:hjmvol}
+\end{equation}
+i.e.\ the classical Hull--White exponential factor loading scaled by the
+stochastic level $\sqrt{V_t}$. The HJM no-arbitrage drift restriction
+\begin{equation}
+\alpha^{\ois}(t,T) = \Sigma^{\ois}(t,T)\int_t^T \Sigma^{\ois}(t,u)\dd u
+\label{eq:hjmdrift}
+\end{equation}
+is inherited automatically: it is exactly the condition encoded in the affine
+convexity term $\Gamma$, and fitting $f^{\ois}$ to the initial curve enforces
+the $t=0$ consistency $P^{\ois}(0,T) = \exp(-\int_0^T f^{\ois}(u)\dd u)$. We
+therefore \emph{impose} no drift by hand; the drift restriction is a consequence
+of specifying the short rate as \eqref{eq:rois} with an affine variance.
+
+\paragraph{Multi-curve spread specification.}
+The key/policy curve \eqref{eq:rkey} is an \emph{additive short-rate spread}
+over OIS, driven by the deterministic $s_{\mathrm{adj}}$ and the stochastic OU
+factor $k$. In the taxonomy of affine multiple-yield-curve models of
+\citet{CFG2019}, this places the model in the ``exogenous spread'' class: the
+risk-free curve and the spread are jointly affine, the spread is
+mean-reverting and---because $\xi>0$ and $W^k$ is a genuine driver---stochastic,
+and the tenor/key bond $P^{\key}(t,T)$ is exponential-affine with an extra
+loading on $k_t$. This is the finite-dimensional counterpart of the
+infinite-dimensional multi-curve HJM constructions of
+\citet{MoreniPallavicini2014, PallaviciniTarenghi2010, SabelliEtal2018,
+BienekEtal2023, MantiMolteni2023}; it retains the economically essential
+separation of discounting and forwarding while remaining calibratable on the
+sparse caplet data actually available. Compared with L\'evy-HJM
+\citep{CrepeyEtal2015} or Wishart multi-curve specifications, the present model
+is deliberately more modest and more transparent: a two-factor lifted-CIR
+variance is rich enough to fit the observed smile and simple enough to diagnose.
+
+% ===========================================================================
+\section{Instrument and pricing}
+% ===========================================================================
+
+\subsection{Per-period caplets}
+
+The calibration instrument is the per-period caplet. For an RFR (backward-looking)
+index, the period rate $A$ over $[T_{\mathrm{fix}}, T_{\mathrm{fix}}+\tau]$ is the
+compounded/averaged overnight rate; for the 6M~EURIBOR tenor it is the
+forward-looking term rate; in both cases the caplet pays $\tau\,(A-K)^+$ at
+$T_{\mathrm{pay}} = T_{\mathrm{fix}}+\tau$. Its time-zero value under the
+$T_{\mathrm{pay}}$-forward measure is
+\begin{equation}
+V_0(T,K) = D(T_{\mathrm{pay}})\;\tau\;
+   \E^{\Qmeas^{T_{\mathrm{pay}}}}\!\bigl[(A-K)^+\bigr],
+\label{eq:caplet}
+\end{equation}
+with $D(\cdot)$ the OIS discount factor. We price \eqref{eq:caplet} by Monte
+Carlo, simulating the joint state \eqref{eq:cir}--\eqref{eq:ou} and forming the
+period rate consistently with the index convention.
+
+\begin{remark}[Instrument/model consistency]
+This is the developed-market reformulation of the calibration target. The
+earlier Russian-market study approximated the payoff by a whole-period
+\emph{average} rate; here the instrument is the genuine per-period caplet, and
+the Monte Carlo pricer simulates the period rate directly. Instrument and model
+are thus aligned, which removes a systematic pricing bias at short maturities
+and---as we discuss in Section~\ref{sec:results}---changes the correct expiry
+scaling of the Bachelier inversion.
+\end{remark}
+
+\subsection{Normal-volatility inversion}
+
+Interest-rate caplets in the current regime are quoted in Bachelier (normal)
+implied volatility, which we adopt as the calibration currency. Writing the
+undiscounted Bachelier price as
+\begin{equation}
+\mathcal B(\Fwd, K, \nu) = \nu\,\phi\!\Bigl(\tfrac{\Fwd-K}{\nu}\Bigr)
+   + (\Fwd-K)\,\Phi\!\Bigl(\tfrac{\Fwd-K}{\nu}\Bigr),
+   \qquad \nu = \Nvol\,\sqrt{t_{\mathrm{fix}}},
+\label{eq:bach_undisc}
+\end{equation}
+the model normal volatility is the $\Nvol$ solving $D(T_{\mathrm{pay}})\,\tau\,
+\mathcal B(\Fwd,K,\Nvol\sqrt{t_{\mathrm{fix}}}) = V_0(T,K)$. The relevant Bachelier
+expiry is the \emph{fixing time} $t_{\mathrm{fix}}$ of the caplet, giving the
+$\sqrt{t_{\mathrm{fix}}}$ scaling in \eqref{eq:bach_undisc}; this replaces the
+$\sqrt{T/3}$ average-rate scaling appropriate to a whole-period-average payoff
+and is the correct convention once instrument and model agree. We invert by
+Newton--Raphson on $\Nvol$, using the closed-form vega $\partial_\nu \mathcal B =
+\phi((\Fwd-K)/\nu)$ and hence $\partial_{\Nvol}(D\tau\mathcal B) = D\tau
+\sqrt{t_{\mathrm{fix}}}\,\phi(d)$, with a bracketed Brent fallback for the deep
+wings where vega is small. Prices at or below intrinsic invert to zero
+volatility and are excluded from the fit.
+
+% ===========================================================================
+\section{Calibration and no-arbitrage}
+\label{sec:calib}
+% ===========================================================================
+
+\subsection{Composite objective}
+
+We calibrate directly on the normal-volatility surface. Let $i$ index the caplet
+grid nodes $(K_i, T_i)$ with market normal vols $\Nmkt_i$ and
+model normal vols $\Nmdl_i(\Theta)$. The core loss is a
+maturity-bucketed, strike-weighted root-mean-square vol error,
+\begin{equation}
+\mathcal L_{\mathrm{fit}}(\Theta)
+   = \sum_{j}\, m_j \sqrt{
+       \frac{\sum_{i\in \mathcal B_j} s_i\,
+            \bigl(\Nmdl_i(\Theta) - \Nmkt_i\bigr)^2}
+            {\sum_{i\in \mathcal B_j} s_i}},
+\label{eq:coreloss}
+\end{equation}
+where $\mathcal B_j$ is the set of nodes in maturity bucket $j$, $m_j$ are
+maturity weights, and $s_i$ are strike weights that de-emphasise deep-ITM nodes
+(a smaller weight for deep-in-the-money strikes, unit weight for ATM/OTM),
+renormalised within each bucket. Bucketing by maturity prevents the long-dated,
+high-vol nodes from dominating a plain global RMSE and gives every expiry a
+comparable voice in the fit. The full objective adds a quadratic
+roughness penalty on the $\theta$-node values, an optional discrete $H^1$
+(Sobolev) semi-norm on $\log\Nvol(K,T)$ that discourages surface roughness
+everywhere \citep{Gatheral2006}, and the soft no-arbitrage penalties of
+Section~\ref{sec:noarb}:
+\begin{equation}
+\mathcal L(\Theta) = \mathcal L_{\mathrm{fit}}(\Theta)
+   + \lambda_\theta \sum_n (\Delta\theta_n)^2
+   + \lambda_S\, \mathcal L_{\mathrm{Sob}}(\Theta)
+   + \lambda_{\mathrm{arb}}\, \mathcal P_{\mathrm{arb}}(\Theta).
+\label{eq:totalloss}
+\end{equation}
+
+\subsection{Adam--SPSA under Monte Carlo noise}
+
+The objective \eqref{eq:totalloss} is (i) noisy, because
+$\Nmdl_i$ is a Monte Carlo estimate, and (ii) non-smooth, because
+the arbitrage penalty and the vol inversion introduce kinks. A pathwise or
+adjoint gradient of the full pipeline is therefore both expensive and unreliable
+near those kinks---the estimated gradient tends to collapse or blow up. We
+instead use simultaneous perturbation stochastic approximation (SPSA), a
+black-box zeroth-order estimator that requires only two objective evaluations per
+step regardless of dimension. With a Rademacher perturbation vector $\Delta$
+(components $\pm 1$) and step $c$, the gradient estimate is
+\begin{equation}
+\widehat g_n(\Theta) = \frac{\mathcal L(\Theta + c\Delta)
+   - \mathcal L(\Theta - c\Delta)}{2c}\;\frac{1}{\Delta_n},
+   \qquad n = 1,\dots,27,
+\label{eq:spsa}
+\end{equation}
+which we feed into an Adam update. The common-random-numbers device (the same
+Monte Carlo seed for the $\Theta\pm c\Delta$ evaluations) suppresses the noise in
+the finite difference. This scheme is robust to both the MC noise and the PAVA
+kinks and avoids the gradient collapse of a naive differentiate-through-inversion
+approach.
+
+\subsection{GPU vectorisation as an enabler}
+
+Monte Carlo calibration of an affine stochastic-volatility model over a full
+$(K,T)$ grid, with repeated no-arbitrage diagnostics inside the optimiser loop,
+is only feasible at interactive speed if pricing is vectorised. We simulate
+paths as the batch dimension on the GPU and accumulate the option payoffs with
+running sums, so the memory footprint is $O(\text{paths})$ rather than
+$O(\text{paths}\times\text{steps})$ and a full surface reprice is a handful of
+tensor operations. This is an implementation enabler, not a separate theoretical
+contribution: its value is that it makes the chosen model calibratable and the
+nested-model programme of Section~\ref{sec:results} practical
+\citep{Savine2020,CapriottiGiles2024}. Adjoint (AAD) sensitivities for caplet
+Greeks and calibration Jacobians are a natural future refinement but are not
+required here.
+
+\subsection{Hard no-arbitrage projection by PAVA}
+\label{sec:noarb}
+
+Soft penalties reduce but do not eliminate static-arbitrage violations. We
+therefore add a hard projection step: the fitted surface is projected onto the
+no-arbitrage cone by alternating two elementary convex projections. This is the
+part of the pipeline we regard as most important for producing a usable surface.
+
+\paragraph{Butterfly (per maturity slice).}
+For each maturity $T$ we convert the slice of normal vols to undiscounted
+Bachelier prices $C(K)$ and enforce the strike-convexity conditions that
+characterise butterfly arbitrage-freeness: $C(K)$ non-increasing and convex in
+$K$, and bounded below by intrinsic. On the non-uniform strike grid the discrete
+convexity constraint reads
+\begin{equation}
+C(K_i) \;\le\; \frac{\Delta K_i\, C(K_{i-1}) + \Delta K_{i-1}\, C(K_{i+1})}
+                    {\Delta K_{i-1} + \Delta K_i},
+\qquad \Delta K_i = K_{i+1} - K_i,
+\label{eq:convex}
+\end{equation}
+alongside $C(K_i)\ge C(K_{i+1})$ and $C(K_i)\ge (\Fwd-K_i)^+ D\tau$. We enforce
+\eqref{eq:convex} and the monotonicity by an $O(n)$-per-pass alternating scan
+(a few passes suffice), then invert the repaired prices back to normal vols by
+the Newton step of \eqref{eq:bach_undisc}. Deep-OTM strikes whose repaired price
+inverts below a floor are left at their current value rather than zeroed.
+
+\paragraph{Calendar (per strike).}
+For each strike $K$ we require the total variance $w(T) = \Nvol(K,T)^2\,T$ to be
+non-decreasing in maturity---the calendar no-arbitrage condition. We project the
+sequence $\{w(T)\}$ onto the non-decreasing cone by isotonic regression (PAVA),
+which returns the $L^2$-nearest non-decreasing sequence, and map back to vols by
+$\Nvol = \sqrt{w/T}$.
+
+Both maps are Euclidean projections onto closed convex sets, so alternating them
+(butterfly across strikes within a slice, calendar across maturities within a
+strike) converges to a point in their intersection by the alternating-projection
+/ POCS argument; a short final cleanup loop guarantees both constraints hold
+simultaneously at every grid node. The projection is minimal in the sense that
+it perturbs the fitted surface by the smallest $L^2$ amount consistent with
+static no-arbitrage.
+
+\subsection{Decomposing the source of arbitrage}
+\label{sec:arbsrc}
+
+A projection tells us \emph{where} a surface violates no-arbitrage but not
+\emph{why}. Following the referee guidance, we separate three sources, because
+each calls for a different remedy. (a) \emph{Market/stripping data}: the flat
+cap-vol quotes must be stripped into per-period caplet vols, and quote
+granularity or bid--offer noise can inject small non-convexities in the
+resulting surface---remedied by pre-smoothing the input quotes. (b) \emph{Monte
+Carlo noise}: finite-path pricing perturbs each node independently, which can
+create spurious local violations---remedied by more paths, antithetic variates or
+control variates, and diagnosable because it shrinks with the path count. (c)
+\emph{Parametric model}: the affine family may be unable to hit every node
+simultaneously, so a residual, \emph{systematic} violation survives even in the
+noise-free limit---this is the genuine model-limitation term, and it is what the
+PAVA projection legitimately repairs. Section~\ref{sec:results} reports the
+violation count attributable to each source by re-pricing at increasing path
+counts and comparing against a pre-smoothed input surface.
+
+% ===========================================================================
+\section{Empirical results}
+\label{sec:results}
+% ===========================================================================
+
+\emph{This section is a structured skeleton. The market-agnostic protocol is
+fixed; the numerical results of the calibration campaign are pending and are
+marked with \TODO{} placeholders.}
+
+\subsection{Data and caplet stripping}
+
+We use Bloomberg VCUB flat cap volatilities and ICVS discount/forward curves as
+of 30~June~2026 for EUR, GBP and USD. EUR is the primary, genuinely dual-curve
+case: ESTR discounting with 6M~EURIBOR projection. GBP is single-curve SONIA.
+USD combines SOFR discounting with a Fed~Funds ``policy'' curve and a
+market-quoted Fed~Funds--SOFR basis, which the OU factor $k_t$ represents. Flat
+cap volatilities are stripped into a per-period caplet surface by a bootstrap
+that is exact on the input: the flat-cap reprice error of the stripped surface is
+$0.000$~bp, so the stripping step introduces no bias into the calibration target.
+The EUR ATM caplet normal volatilities run from roughly $48$~bp at the $6$M
+expiry to $\sim 73$~bp near $5$Y and back to $\sim 66$~bp at $20$Y, with a convex
+smile whose minimum sits near the forward---exactly the strike curvature that
+Proposition~\ref{prop:flat} rules out for any Gaussian model.
+
+\begin{table}[t]
+\centering
+\caption{EUR caplet surface: dimensions and ATM level by maturity bucket.}
+\label{tab:data}
+\begin{tabular}{lccc}
+\toprule
+Maturity bucket & \# strikes & ATM normal vol (bp) & Forward (\%) \\
+\midrule
+$\le 1$Y   & \TODO{n} & \TODO{ATM} & \TODO{fwd} \\
+$1$--$5$Y  & \TODO{n} & \TODO{ATM} & \TODO{fwd} \\
+$5$--$10$Y & \TODO{n} & \TODO{ATM} & \TODO{fwd} \\
+$>10$Y     & \TODO{n} & \TODO{ATM} & \TODO{fwd} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{EUR calibration fit}
+
+Figure~\ref{fig:surface} overlays the calibrated model surface on the market
+surface. \TODO{EUR market-vs-model surface overlay figure}. We report the fit
+with both absolute and relative metrics, following the referee's request that
+publication-grade calibration not rely on absolute bp alone. Define the relative
+error $e_i = (\Nmdl_i - \Nmkt_i)/\Nmkt_i$ and report, per maturity bucket, the
+absolute RMSE (bp),
+the relative RMSE (\%), and an ATM-versus-OTM decomposition. Table~\ref{tab:fit}
+gives the shell.
+
+\begin{table}[t]
+\centering
+\caption{EUR fit quality: absolute, relative, and ATM/OTM decomposition.}
+\label{tab:fit}
+\begin{tabular}{lcccc}
+\toprule
+Maturity bucket & Abs.\ RMSE (bp) & Rel.\ RMSE (\%) & ATM RMSE (bp) & OTM RMSE (bp) \\
+\midrule
+$\le 1$Y   & \TODO{} & \TODO{} & \TODO{} & \TODO{} \\
+$1$--$5$Y  & \TODO{} & \TODO{} & \TODO{} & \TODO{} \\
+$5$--$10$Y & \TODO{} & \TODO{} & \TODO{} & \TODO{} \\
+$>10$Y     & \TODO{} & \TODO{} & \TODO{} & \TODO{} \\
+\midrule
+All        & \TODO{EUR overall RMSE} & \TODO{} & \TODO{} & \TODO{} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Figure~\ref{fig:termstruct} shows the calibrated variance targets
+$\theta_1(t),\theta_2(t)$ and leverage $\rho(t)$. \TODO{$\theta(t)$, $\rho(t)$
+term-structure figure}.
+
+\subsection{Nested-model hierarchy}
+\label{sec:nested}
+
+To isolate the marginal contribution of each modelling ingredient we calibrate a
+nested hierarchy on the \emph{identical} EUR surface: (a) one-factor Gaussian
+Hull--White; (b) two-factor Gaussian Hull--White; (c) Hull--White with a
+deterministic volatility term structure; and (d) the proposed two-factor
+lifted-CIR HWH. Models (a)--(c) all satisfy Proposition~\ref{prop:flat} (or a
+term-structure-only relaxation of it) and cannot fit strike curvature; the ladder
+quantifies exactly how much of the residual each ingredient removes and confirms
+that the smile fit is attributable to stochastic volatility rather than to added
+parameters per se. Table~\ref{tab:nested} is the results shell.
+
+\begin{table}[t]
+\centering
+\caption{Nested-model ladder on the EUR surface (same data, same grid).}
+\label{tab:nested}
+\begin{tabular}{llccc}
+\toprule
+Model & \# params & Vol RMSE (bp) & Rel.\ RMSE (\%) & Smile captured? \\
+\midrule
+(a) 1F Gaussian HW               & \TODO{} & \TODO{} & \TODO{} & No (flat) \\
+(b) 2F Gaussian HW               & \TODO{} & \TODO{} & \TODO{} & No (flat) \\
+(c) HW + deterministic vol       & \TODO{} & \TODO{} & \TODO{} & Term-structure only \\
+(d) 2F lifted-CIR HWH (proposed) & $27$    & \TODO{} & \TODO{} & Yes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{No-arbitrage diagnostics and source decomposition}
+
+We report static-arbitrage coverage before and after the PAVA projection of
+Section~\ref{sec:noarb}, and the fit cost of the projection (the vol RMSE change
+induced by the projection). Figure~\ref{fig:pava} shows a representative slice
+before and after repair. \TODO{PAVA before/after figure}. Table~\ref{tab:arb}
+decomposes the pre-projection violations into the three sources of
+Section~\ref{sec:arbsrc}---market/stripping data, Monte Carlo noise, and
+parametric model---by re-pricing at increasing path counts and against a
+pre-smoothed input surface.
+
+\begin{table}[t]
+\centering
+\caption{No-arbitrage coverage and decomposition of violation sources.}
+\label{tab:arb}
+\begin{tabular}{lcc}
+\toprule
+Quantity & Before PAVA & After PAVA \\
+\midrule
+Butterfly-arb-free nodes (\%)  & \TODO{} & \TODO{} \\
+Calendar-arb-free nodes (\%)   & \TODO{} & \TODO{} \\
+Vol RMSE (bp)                  & \TODO{} & \TODO{} \\
+\midrule
+\multicolumn{3}{l}{\emph{Violations attributable to:}} \\
+\quad Market/stripping data    & \multicolumn{2}{c}{\TODO{count / \%}} \\
+\quad Monte Carlo noise        & \multicolumn{2}{c}{\TODO{count / \%}} \\
+\quad Parametric model         & \multicolumn{2}{c}{\TODO{count / \%}} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Short-maturity residual and a scheduled-jump study}
+\label{sec:jump}
+
+The continuous-diffusion model cannot fully represent scheduled central-bank
+decisions, which is expected to leave a systematic residual at short maturities
+($T < 6$M) where meeting risk dominates. We quantify this residual and test how
+much of it is attributable to policy-event risk with a simple scheduled-jump
+extension: at the known ECB (and, for GBP/USD, BoE/Fed) meeting dates in the
+front window we augment \eqref{eq:rkey} with a compound-Poisson jump of small
+fixed intensity concentrated on those dates,
+\begin{equation}
+\dd r^{\key}_t \;\longmapsto\; \dd r^{\key}_t + \dd J_t,
+\qquad J_t = \sum_{m:\,t_m \le t} \eta_m,
+\label{eq:jump}
+\end{equation}
+with $t_m$ the scheduled meeting dates and $\eta_m$ i.i.d.\ jump sizes. This is
+an affine jump-diffusion in the sense of the stochastic-discontinuity literature
+\citep{FGGS2020,FGS2023}; even uncalibrated, it lets us measure how much of the
+$T<6$M residual smile the meeting schedule can plausibly explain.
+Table~\ref{tab:jump} reports the short-end residual with and without the jump
+term. \TODO{short-maturity residual + jump-study numbers}.
+
+\begin{table}[t]
+\centering
+\caption{Short-maturity ($T<6$M) residual smile: diffusion vs.\ scheduled-jump.}
+\label{tab:jump}
+\begin{tabular}{lcc}
+\toprule
+Expiry & Diffusion residual RMSE (bp) & With scheduled jump (bp) \\
+\midrule
+$1$M & \TODO{} & \TODO{} \\
+$3$M & \TODO{} & \TODO{} \\
+$6$M & \TODO{} & \TODO{} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Cross-currency robustness and swaption out-of-sample}
+
+We repeat the EUR protocol on GBP (SONIA) and USD (SOFR + Fed~Funds policy basis)
+to check that the specification and calibration are not EUR-specific.
+Table~\ref{tab:xccy} collects the headline fit metrics across currencies. As an
+out-of-sample validation we price ATM swaptions---instruments not used in the
+caplet calibration---from the calibrated caplet parameters and compare against
+market ATM swaption vols; Figure~\ref{fig:swaption} shows the comparison.
+\TODO{GBP/USD calibration numbers}; \TODO{swaption out-of-sample figure and
+error}.
+
+\begin{table}[t]
+\centering
+\caption{Cross-currency robustness: headline fit metrics.}
+\label{tab:xccy}
+\begin{tabular}{lcccc}
+\toprule
+Currency & Curve setup & Vol RMSE (bp) & Rel.\ RMSE (\%) & Arb-free after PAVA (\%) \\
+\midrule
+EUR & ESTR / 6M EURIBOR      & \TODO{} & \TODO{} & \TODO{} \\
+GBP & SONIA (single-curve)   & \TODO{} & \TODO{} & \TODO{} \\
+USD & SOFR / Fed Funds basis & \TODO{} & \TODO{} & \TODO{} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\framebox[0.85\textwidth]{\rule{0pt}{0.32\textwidth}\quad
+\TODO{EUR market-vs-model caplet surface overlay}\quad}
+\caption{Calibrated EUR caplet normal-volatility surface (model) overlaid on the
+stripped market surface.}
+\label{fig:surface}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\framebox[0.85\textwidth]{\rule{0pt}{0.28\textwidth}\quad
+\TODO{$\theta_1(t),\theta_2(t),\rho(t)$ term structures}\quad}
+\caption{Calibrated variance targets and leverage term structure.}
+\label{fig:termstruct}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\framebox[0.85\textwidth]{\rule{0pt}{0.28\textwidth}\quad
+\TODO{PAVA before/after slice}\quad}
+\caption{A representative maturity slice before and after the hard PAVA
+projection onto the butterfly/calendar cone.}
+\label{fig:pava}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\framebox[0.85\textwidth]{\rule{0pt}{0.28\textwidth}\quad
+\TODO{swaption ATM model-vs-market}\quad}
+\caption{Out-of-sample ATM swaption volatilities: model (from calibrated caplet
+parameters) vs.\ market.}
+\label{fig:swaption}
+\end{figure}
+
+% ===========================================================================
+\section{Conclusions and extensions}
+% ===========================================================================
+
+We have presented a multi-curve affine stochastic-volatility short-rate model
+for RFR and IBOR caplet surfaces, organised around three ideas: a
+market-independent proof that Gaussian short-rate models imply a flat Bachelier
+smile and hence that stochastic volatility is necessary
+(Proposition~\ref{prop:flat}); a two-factor lifted-CIR Hull--White--Heston
+specification with a stochastic basis, positioned explicitly as a
+finite-dimensional affine realization of the multi-curve HJM framework of
+\citet{CFG2016,CFG2019}; and an arbitrage-aware calibration in which soft
+penalties are followed by a hard PAVA projection onto the static no-arbitrage
+cone. GPU-vectorised Monte Carlo and a zeroth-order Adam--SPSA optimiser are the
+enablers that make the model calibratable against a noisy, non-smooth objective,
+not contributions in their own right.
+
+Several extensions follow naturally and are partly explored in
+Section~\ref{sec:jump}. Scheduled affine jumps at policy-meeting dates are the
+most economically motivated: the short-maturity residual is a symptom of the
+continuous-diffusion assumption meeting discrete policy decisions, and the
+stochastic-discontinuity framework \citep{FGGS2020,FGS2023} is the right next
+step. Richer correlation and skew structure---a fuller leverage function or an
+explicit event-risk skew component---would help distinguish diffusive from
+event-driven asymmetry. Finally, pathwise and adjoint (AAD) sensitivities
+\citep{CapriottiGiles2024,Savine2020} would turn the calibrated model into a
+production risk engine for caplet and cap portfolios. None of these are
+corrections of the approach; they are continuations of it.
+
+% ===========================================================================
+\section*{Acknowledgements}
+% ===========================================================================
+\noindent We thank Roland Grinis for detailed review comments that shaped the
+structure of this paper. Market data: Bloomberg.
+
+% ===========================================================================
+\begin{thebibliography}{99}
+% ===========================================================================
+
+\bibitem[Abi Jaber(2019)]{AbiJaber2019}
+Abi Jaber, E. (2019). Lifting the Heston model.
+\emph{Quantitative Finance} 19(12), 1995--2013.
+
+\bibitem[Bienek et al.(2023)]{BienekEtal2023}
+Bienek, T., Deelstra, G., Lichtenstern, A. and Zagst, R. (2023).
+A multi-curve HJM factor model for pricing and risk management.
+\emph{Quantitative Finance} 23(10).
+
+\bibitem[Cao et al.(2020)]{Cao2020}
+Cao, J. et al. (2020). Calibration of stochastic-volatility models and the
+implied-volatility surface. \TODO{confirm exact Cao calibration-benchmark reference}.
+
+\bibitem[Capriotti and Giles(2024)]{CapriottiGiles2024}
+Capriotti, L. and Giles, M. (2024). 15 years of Adjoint Algorithmic
+Differentiation (AAD) in finance. \emph{Quantitative Finance}.
+
+\bibitem[Chiarella and Kwon(2003)]{ChiarellaKwon2003}
+Chiarella, C. and Kwon, O.K. (2003). Finite dimensional affine realisations of
+HJM models in terms of forward rates and yields.
+\emph{Review of Derivatives Research} 6, 129--155.
+
+\bibitem[Cr\'epey et al.(2015)]{CrepeyEtal2015}
+Cr\'epey, S., Grbac, Z., Ngor, N. and Skovmand, D. (2015). A L\'evy HJM
+multiple-curve model with application to CVA computation.
+\emph{Quantitative Finance} 15(3), 401--419.
+
+\bibitem[Cuchiero et al.(2016)]{CFG2016}
+Cuchiero, C., Fontana, C. and Gnoatto, A. (2016). A general HJM framework for
+multiple yield curve modelling. \emph{Finance and Stochastics} 20(2), 267--320.
+
+\bibitem[Cuchiero et al.(2019)]{CFG2019}
+Cuchiero, C., Fontana, C. and Gnoatto, A. (2019). Affine multiple yield curve
+models. \emph{Mathematical Finance} 29(2), 568--611.
+
+\bibitem[Fontana et al.(2020)]{FGGS2020}
+Fontana, C., Grbac, Z., Guembel, S. and Schmidt, T. (2020). Term structure
+modelling for multiple curves with stochastic discontinuities.
+\emph{Finance and Stochastics} 24(2), 465--511.
+
+\bibitem[Fontana et al.(2023)]{FGS2023}
+Fontana, C., Grbac, Z. and Schmidt, T. (2023). Term structure modeling with
+overnight rates beyond stochastic continuity. \emph{Mathematical Finance}.
+
+\bibitem[Gatheral(2006)]{Gatheral2006}
+Gatheral, J. (2006). \emph{The Volatility Surface: A Practitioner's Guide}.
+Wiley. (Total-variance / arbitrage-free surface conditions.)
+
+\bibitem[Grbac and Runggaldier(2016)]{GrbacRunggaldier2016}
+Grbac, Z. and Runggaldier, W. (2016). \emph{Interest Rate Modeling: Post-Crisis
+Challenges and Approaches}. Springer.
+
+\bibitem[Henrard(2014)]{Henrard2014}
+Henrard, M. (2014). \emph{Interest Rate Modelling in the Multi-Curve Framework}.
+Palgrave Macmillan.
+
+\bibitem[Manti and Molteni(2023)]{MantiMolteni2023}
+Manti, F. and Molteni, D. (2023). Parsimonious HJM-FMM model with the new
+risk-free term rates. SSRN working paper.
+
+\bibitem[Moreni and Pallavicini(2014)]{MoreniPallavicini2014}
+Moreni, N. and Pallavicini, A. (2014). Parsimonious HJM modelling for multiple
+yield curve dynamics. \emph{Quantitative Finance} 14(2), 199--210.
+
+\bibitem[Pallavicini and Tarenghi(2010)]{PallaviciniTarenghi2010}
+Pallavicini, A. and Tarenghi, M. (2010). Interest-rate modeling with multiple
+yield curves. SSRN working paper.
+
+\bibitem[Sabelli et al.(2018)]{SabelliEtal2018}
+Sabelli, C., Pioppi, M., Sitzia, L. and Bormetti, G. (2018). Multi-curve HJM
+modelling for risk management. \emph{Quantitative Finance} 18(4), 563--590.
+
+\bibitem[Savine(2020)]{Savine2020}
+Savine, A. (2020). \emph{Modern Computational Finance: AAD and Parallel
+Simulations}. Wiley.
+
+\end{thebibliography}
+
+\end{document}

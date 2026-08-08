@@ -1,0 +1,348 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{siunitx}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xcolor}
+\graphicspath{{../figures/}}
+
+\title{\bfseries Calibrating a Two-Factor Lifted-CIR Hull--White--Heston Model\\
+to the EUR Caplet Volatility Surface}
+\author{Technical write-up (EUR case study)}
+\date{\today}
+
+\newcommand{\dW}{\,\mathrm{d}W}
+\newcommand{\dt}{\,\mathrm{d}t}
+\newcommand{\bp}{\,\text{bp}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We calibrate a multi-curve, two-factor \emph{lifted}-CIR stochastic-volatility short-rate model
+(a Hull--White--Heston, HWH, construction) jointly to the entire EUR caplet normal-volatility
+surface. The state is driven by a shared level factor with stochastic variance and a Hull--White
+basis factor separating the projection curve from the OIS discount curve. Caplets are priced by
+GPU Monte Carlo on the average forward rate over each accrual period and inverted to Bachelier
+(normal) volatilities with a partial-year (\(\sqrt{t_{\text{fix}}}\)) convention that matches the
+quoting basis. The CIR variance factors are sampled with the Andersen (2008) quadratic-exponential
+(QE) scheme, and the 27 parameters are estimated with a gradient-free Adam--SPSA optimiser under a
+vega-weighted objective. Against 340 caplets spanning maturities \(0.5\)--\(10\)Y and strikes
+\(-1.5\%\) to \(+10\%\), the model attains an overall normal-volatility RMSE of \(15.1\bp\), an
+at-the-money (ATM) mean absolute error of \(3.1\bp\), and a \(7.7\bp\) RMSE over the liquid
+(\(|K-F|<2\%\)) core. A nested-model ladder shows that stochastic volatility is responsible for the
+bulk of the fit: the best flat-smile Gaussian restriction attains only \(\approx 45\bp\).
+\end{abstract}
+
+\section{Motivation}
+Developed-market (here EUR) caplet surfaces exhibit a pronounced, maturity-dependent smile: a
+convex ``payer'' wing at high strikes and a steep short-maturity slope that flattens with maturity.
+Any Gaussian short-rate model (one- or multi-factor Hull--White with a deterministic volatility
+term structure) produces a \emph{strike-flat} normal-volatility smile and therefore cannot, by
+construction, reproduce this curvature. Introducing an affine stochastic variance for the driving
+factor restores both the curvature (through the vol-of-vol) and the skew (through a leverage
+correlation), while keeping the model tractable for large-scale Monte Carlo calibration. The
+purpose of this note is to document precisely \emph{what} process is fitted, \emph{how} the market
+data are fed in, and \emph{how well} the joint calibration reproduces the full surface.
+
+\section{The multi-curve model}
+
+\subsection{Why two curves}
+Before 2008, a single yield curve served both to \emph{discount} future cash flows and to
+\emph{project} the floating rates those cash flows are indexed to: the interbank term rate
+(Euribor) was treated as effectively risk-free and equal to the overnight-indexed swap (OIS) rate.
+The financial crisis broke this identity. Unsecured term lending (Euribor) began to embed a
+material credit- and liquidity-risk premium, while collateralised derivatives came to be discounted
+at the risk-free overnight rate paid on collateral (€STR, the successor to EONIA, and the OIS built
+from it). The two rates diverged and have stayed apart, leaving a persistent, tenor-dependent
+\emph{basis} between them.
+
+Pricing a EUR cap therefore requires \emph{two} curves that are no longer interchangeable:
+\begin{itemize}
+  \item a \textbf{discount curve} --- the €STR/OIS curve --- for the collateralised present value of
+  each caplet payoff; and
+  \item a \textbf{projection (forwarding) curve} --- the 6M Euribor curve --- which fixes the
+  floating rate the caplet actually pays on.
+\end{itemize}
+In the EUR data the Euribor curve sits \(+9\) to \(+21\bp\) above OIS across maturities (the
+6M-Euribor--OIS basis; see Section~4). Collapsing the two curves into one would misprice every
+caplet forward by this basis---an order of magnitude larger than the \(\sim\!\SI{2}{bp}\) fit we
+are trying to achieve---so the basis must be carried explicitly. This is the multi-curve framework
+of Bianchetti, Mercurio, and others; our contribution is to embed it inside an affine
+stochastic-volatility model so that the \emph{smile}, not just the forward, is priced consistently
+across both curves.
+
+\subsection{State dynamics}
+Let \(f_{\text{ois}}(t)\) and \(f_{\text{proj}}(t)\) denote the OIS (discount) and 6M-Euribor
+(projection) instantaneous forward curves, both taken directly from the market. We drive them with
+a \emph{shared} level factor \(x\)---the common, essentially risk-free, movement of all EUR
+rates---and an additive Hull--White \emph{basis} factor \(k\) that lives only on the projection
+curve:
+\begin{align}
+r_{\text{ois}}(t) &= f_{\text{ois}}(t) + x(t), \\
+r_{\text{proj}}(t) &= f_{\text{proj}}(t) + x(t) + k(t).
+\end{align}
+The single shared \(x\) enforces that discounting and projection move together (a parallel shift in
+rates moves both curves by the same amount), while \(k\) lets the basis fluctuate around its market
+forward \(f_{\text{proj}}-f_{\text{ois}}\). The factor dynamics under the pricing measure are
+\begin{align}
+\mathrm{d}x(t) &= -\lambda\, x(t)\dt + \sqrt{V(t)}\;\dW^{x}(t), \\
+\mathrm{d}k(t) &= -\gamma\, k(t)\dt + \xi\;\dW^{k}(t), \\
+V(t) &= w\,V_1(t) + (1-w)\,V_2(t), \\
+\mathrm{d}V_i(t) &= \kappa_i\big(\theta_i(t) - V_i(t)\big)\dt + \varepsilon\,\sqrt{V_i(t)}\;\dW^{v_i}(t),
+\quad i=1,2 .
+\end{align}
+The shared factor \(x\) carries a \emph{stochastic} instantaneous variance \(V\), built as a convex
+mixture of two Cox--Ingersoll--Ross (``lifted''/multi-factor CIR) variances with a fast and a slow
+mean-reversion (\(\kappa_1\equiv\kappa_f\), \(\kappa_2\equiv\kappa_s\)); this two-timescale
+construction is what lets a single parameter set bend across maturities. The Heston vol-of-vol
+\(\varepsilon\) generates smile \emph{curvature}, and a term structure of leverage correlations
+\(\rho(t)=\mathrm{corr}(\dW^{x},\dW^{v_1})\) generates the \emph{skew}. The long-run variance levels
+\(\theta_1(t),\theta_2(t)\) and the correlation \(\rho(t)\) are represented as monotone
+(PCHIP) splines through fixed nodes rather than constants. The Hull--White factor \(k\), with
+constant volatility \(\xi\), carries the OIS-vs-projection basis, which in the EUR data is
+\(+21\bp\) at \(1\)Y, \(+18\bp\) at \(5\)Y and \(+9\bp\) at \(10\)Y.
+
+Setting \(\varepsilon=0\) collapses the variance to a deterministic term structure and the smile to
+strike-flat; further flattening \(\theta\) and switching off \(k\) recovers the two- and
+one-factor Gaussian Hull--White models. This nesting (Section~\ref{sec:ladder}) provides an
+apples-to-apples decomposition of the fit.
+
+\section{Instrument and volatility inversion}
+The calibration instruments are per-period (backward-looking / RFR-style) caplets. For a caplet
+fixing at \(t_{\text{fix}}\) with accrual \(\tau\) (EUR: \(\tau=0.5\)) and strike \(K\), the
+underlying is the average 6M~Euribor projection rate over the accrual window,
+\begin{equation}
+A = \frac{1}{\tau}\int_{t_{\text{fix}}}^{t_{\text{fix}}+\tau} r_{\text{proj}}(u)\,\mathrm{d}u ,
+\end{equation}
+and the (OIS-discounted) payoff is \((A-K)^{+}\,\tau\). Monte Carlo estimators of the discount
+factor \(D=\mathbb{E}[e^{-\int_0^{t_{\text{fix}}+\tau} r_{\text{ois}}}]\), the forward
+\(F=\mathbb{E}[A\,e^{-\int r_{\text{ois}}}]/\mathbb{E}[e^{-\int r_{\text{ois}}}]\), and the price
+\(\mathrm{pv}=\mathbb{E}[(A-K)^{+}\tau\, e^{-\int r_{\text{ois}}}]\) are computed on the same path
+set. The model price is then inverted to a normal (Bachelier) implied volatility
+\begin{equation}
+\mathrm{pv} = D\,\tau\Big[(F-K)\,\Phi(d) + \sigma\sqrt{t_{\text{fix}}}\;\phi(d)\Big],
+\qquad d=\frac{F-K}{\sigma\sqrt{t_{\text{fix}}}},
+\end{equation}
+by bisection on \(\sigma\). The \emph{partial-year} convention---variance accrues as
+\(\sigma^2\,t_{\text{fix}}\) with expiry \(t_{\text{fix}}\)---matches the convention under which the
+market caplet surface is stripped and quoted, so model and market volatilities are compared on a
+common footing.
+
+\section{Market data}
+Three market inputs are fed in, all sourced from Bloomberg:
+\begin{itemize}
+  \item the OIS forward curve (\(360\) monthly points to \(30\)Y) for discounting;
+  \item the 6M~Euribor projection forward curve (\(360\) monthly points) for the caplet underlying; and
+  \item the caplet normal-volatility surface, stripped from the flat cap-vol quotes into
+  per-period Bachelier volatilities indexed by \((t_{\text{fix}},K)\).
+\end{itemize}
+The calibration set used here is the sub-surface with \(t_{\text{fix}}\le 10\)Y: \(20\) maturities
+(\(0.5,1.0,\dots,10.0\)Y) \(\times\) \(17\) strikes (\(-1.5\%\) to \(+10\%\)), i.e.\ \(340\)
+caplets, fitted \emph{jointly} with one parameter vector.
+
+\section{Calibration}
+\paragraph{Simulation.} Paths are generated on a GPU with an \(O(N)\)-memory Monte Carlo (running
+integrals, never materialising the full path matrix for the pricing sums). The CIR variance
+factors are sampled with the Andersen (2008) quadratic-exponential (QE) scheme. In the low-vol DM
+regime the CIR is strongly Feller-violated (\(2\kappa\theta\ll\varepsilon^2\)); an Euler scheme
+with reflection biases the variance upward---most severely at short maturities, where it inflated
+the \(0.5\)Y ATM volatility from a market level of \(44\bp\) to over \(100\bp\)---whereas QE is
+moment-exact and places an honest point mass at zero in the exponential regime.
+
+\paragraph{Objective.} Parameters are estimated by minimising a \emph{vega-weighted} normal-vol
+RMSE. Each caplet is weighted by its Bachelier vega shape \(\phi(d)\) (with a \(20\%\) floor):
+this fits the liquid ATM tightly and down-weights the near-intrinsic deep-ITM and far-OTM wings,
+whose quoted volatilities carry almost no vega and are numerically ill-defined. Optimisation uses a
+self-contained Adam--SPSA (simultaneous-perturbation) scheme---gradient-free, appropriate for the
+noisy, non-differentiable Monte Carlo objective---with cosine step/perturbation decay. The loss
+converges by \(\approx 150\) iterations and then oscillates at the SPSA noise floor
+(Figure~\ref{fig:conv}); the running best is retained.
+
+\section{Results}
+\subsection{Goodness of fit}
+Table~\ref{tab:fit} summarises the fit of the proposed model. The overall RMSE is \(15.1\bp\), the
+ATM term structure is reproduced to \(3.1\bp\) mean absolute error, and the liquid core
+(\(|K-F|<2\%\)) is fitted to \(7.7\bp\). Figure~\ref{fig:surface3d} overlays the entire calibrated
+surface on the market mesh; Figure~\ref{fig:review} then breaks the fit down into the ATM term
+structure, representative smile slices, and the signed residual surface.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.86\textwidth]{fig_eur_surface3d.png}
+\caption{The calibrated EUR caplet normal-volatility surface (coloured) with the market surface
+overlaid as a black mesh. The mesh sits on the model surface across the liquid body of the surface;
+the only visible separation is the short-maturity deep-ITM wing, where the near-intrinsic quotes
+carry negligible vega. Strike is shown on a uniform index (real strikes on the tick labels) so the
+non-uniform strike ladder does not warp the mesh.}
+\label{fig:surface3d}
+\end{figure}
+
+\begin{table}[t]
+\centering
+\begin{tabular}{lr}
+\toprule
+Metric & Value \\
+\midrule
+Overall normal-vol RMSE & \(15.1\bp\) \\
+ATM mean absolute error & \(3.1\bp\) \\
+Liquid core RMSE (\(|K-F|<2\%\)) & \(7.7\bp\) \\
+Number of caplets & \(340\) \\
+Free parameters & \(27\) \\
+\bottomrule
+\end{tabular}
+\caption{Fit of the calibrated 2F lifted-CIR HWH model (QE simulation, vega-weighted objective).}
+\label{tab:fit}
+\end{table}
+
+\subsection{Nested-model ladder}
+\label{sec:ladder}
+Table~\ref{tab:ladder} decomposes the fit across the nested restrictions on identical data. The
+Gaussian restrictions (flat smile) and the deterministic-vol term structure all sit near
+\(45\)--\(47\bp\); introducing the two-factor stochastic variance (HWH) reduces the RMSE to
+\(15.1\bp\). Stochastic volatility, not additional Gaussian factors, is what fits the surface.
+
+\begin{table}[t]
+\centering
+\begin{tabular}{lccc}
+\toprule
+Model & Smile & Vol-of-vol \(\varepsilon\) & RMSE (bp) \\
+\midrule
+1F Gaussian Hull--White        & flat            & 0 & 46.1 \\
+2F Gaussian Hull--White        & flat            & 0 & 47.0 \\
+Hull--White + deterministic vol& term-structure  & 0 & 45.3 \\
+\textbf{2F lifted-CIR HWH (proposed)} & \textbf{full} & \(\mathbf{0.11}\) & \(\mathbf{15.1}\) \\
+\bottomrule
+\end{tabular}
+\caption{Nested-model ladder on the EUR surface, all models fit to the full surface. The Gaussian
+and deterministic-vol rungs have \(\varepsilon=0\), so their variance is deterministic and the
+simulation scheme is immaterial; they define the strike-flat baseline (\(\approx 45\bp\)). Only the
+stochastic-volatility model reduces the RMSE below it. The SV model is additionally vega-weighted to
+tighten the liquid core (Section~6).}
+\label{tab:ladder}
+\end{table}
+
+\subsection{Calibrated parameters}
+The model has \(27\) free parameters: two \(8\)-node long-run variance term structures
+\(\theta_1,\theta_2\), a \(3\)-node leverage term structure \(\rho\), the two mean reversions
+\(\kappa_f,\kappa_s\), the mixing weight \(w\), the vol-of-vol \(\varepsilon\), the level-factor and
+basis-factor reversions \(\lambda,\gamma\), the basis vol \(\xi\), and the initial variance
+\(V_0\). Tables~\ref{tab:theta} and \ref{tab:scalar} report the full calibrated set. The
+\(\theta_i(t)\) and \(\rho(t)\) nodes are interpolated by monotone PCHIP splines; \(\theta\) is
+reported as \(\sqrt{\theta}\times10^4\) (the instantaneous vol scale in bp, before mean reversion
+and accrual averaging pull the caplet implied vol below it).
+
+The estimates are economically sensible: a fast/slow variance pair (\(\kappa_f=1.61\),
+\(\kappa_s=0.23\)) mixed with weight \(w=0.61\); a moderate vol-of-vol \(\varepsilon=0.11\); a
+slowly mean-reverting level factor (\(\lambda=0.19\)); and a \emph{positive} leverage \(\rho\approx
+0.22\)--\(0.27\), consistent with the right-skewed (payer) cap smile. The Hull--White basis
+volatility is small (\(\xi=7.5\times10^{-4}\)), so the Euribor--OIS basis is close to
+deterministic---it follows its market forward with only a small mean-reverting fluctuation.
+
+\begin{table}[t]
+\centering
+\begin{tabular}{lcccccccc}
+\toprule
+node (yr) & 0.25 & 0.5 & 1 & 2 & 3 & 5 & 7 & 10 \\
+\midrule
+\(\sqrt{\theta_1}\) (bp) & 145.8 & 112.8 & 162.0 & 153.8 & 172.6 & 169.0 & 192.0 & 132.4 \\
+\(\sqrt{\theta_2}\) (bp) & 133.6 & 71.9 & 102.5 & 157.2 & 103.5 & 120.6 & 155.9 & 34.4 \\
+\bottomrule
+\end{tabular}
+\caption{Calibrated long-run variance term structures (fast factor \(\theta_1\), slow factor
+\(\theta_2\)), reported as \(\sqrt{\theta}\) in bp at the \(8\) spline nodes.}
+\label{tab:theta}
+\end{table}
+
+\begin{table}[t]
+\centering
+\begin{tabular}{lccccccccc}
+\toprule
+\(\kappa_f\) & \(\kappa_s\) & \(w\) & \(\varepsilon\) & \(\lambda\) & \(\gamma\) & \(\xi\) &
+\(V_0\) & \\
+\midrule
+1.61 & 0.23 & 0.61 & 0.11 & 0.19 & 0.51 & \(7.5\!\times\!10^{-4}\) & 0 & \\
+\midrule
+\multicolumn{2}{l}{leverage} & \(\rho(1\text{Y})\) & \(\rho(5\text{Y})\) & \(\rho(10\text{Y})\) &
+\multicolumn{4}{l}{} \\
+& & 0.255 & 0.215 & 0.268 & \multicolumn{4}{l}{} \\
+\bottomrule
+\end{tabular}
+\caption{Calibrated scalar parameters (top) and the \(3\)-node leverage term structure (bottom).}
+\label{tab:scalar}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_eur_review.png}
+\caption{EUR calibration, market (black) vs.\ model (red). Top-left: ATM term structure; remaining
+panels: smile slices at 1/2/5/10Y and the signed residual surface (\(\text{model}-\text{market}\),
+bp). The residual is near-zero across the liquid body; the only material band is the short-dated
+deep-ITM wing, where the near-intrinsic quotes carry negligible vega.}
+\label{fig:review}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_eur_ladder.png}
+\caption{Nested-model ladder: RMSE bars (left), ATM term structure (centre), and the \(5\)Y smile
+(right). The Gaussian/deterministic-vol rungs are strike-flat; only the stochastic-volatility model
+follows the market smile.}
+\label{fig:ladder}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.7\textwidth]{fig_eur_convergence.png}
+\caption{Adam--SPSA training loop. The loss converges by \(\approx 150\) iterations and then
+oscillates at the stochastic-gradient noise floor; the running best (\(15\)--\(16\bp\)) is retained.}
+\label{fig:conv}
+\end{figure}
+
+\section{Discussion and further work}
+The model reproduces the EUR caplet surface to first order across the whole strike/maturity range
+with a single parameter set. Three residuals remain and are reported honestly. First, the
+short-dated deep-ITM wing is over-priced by the model; these strikes are near-intrinsic and carry
+almost no vega, so their inverted volatilities are numerically ill-conditioned and are
+intentionally down-weighted. Second, the \(1\)Y and \(10\)Y ATM points remain \(\approx 10\bp\)
+soft; a long-end \(\theta\) node or maturity re-weighting is the natural lever. Third, the extreme
+short-maturity/high-strike corner is the steepest feature of the surface and the hardest for a pure
+diffusion to reach.
+
+Planned extensions: (i) calibrate the full surface to \(29.5\)Y (the stripped surface already
+carries these quotes); (ii) a cross-market robustness study on the RFR markets (USD SOFR, GBP
+SONIA), where the average-over-accrual payoff is convention-exact rather than an approximation of a
+term fixing; and (iii) an out-of-sample check by repricing ATM swaptions---which do not enter the
+calibration---with the calibrated parameters.
+
+\appendix
+\section{The quadratic-exponential (QE) variance scheme}
+Each CIR variance factor is advanced over a step \(\Delta\) with the Andersen (2008) QE scheme.
+Writing \(e=e^{-\kappa\Delta}\), the exact conditional mean and variance of \(V_{t+\Delta}\) given
+\(V_t\) are
+\begin{equation}
+m = \theta + (V_t-\theta)\,e, \qquad
+s^2 = \frac{V_t\,\varepsilon^2 e(1-e)}{\kappa} + \frac{\theta\,\varepsilon^2(1-e)^2}{2\kappa},
+\qquad \psi = \frac{s^2}{m^2}.
+\end{equation}
+For \(\psi\le\psi_c\) (with \(\psi_c=1.5\)) a quadratic sample is drawn,
+\begin{equation}
+V_{t+\Delta} = a\,(b+Z)^2,\quad Z\sim N(0,1),\quad
+b^2 = \tfrac{2}{\psi}-1+\sqrt{\tfrac{2}{\psi}\big(\tfrac{2}{\psi}-1\big)},\quad
+a=\frac{m}{1+b^2};
+\end{equation}
+for \(\psi>\psi_c\) an exponential/point-mass sample is drawn,
+\begin{equation}
+V_{t+\Delta} = \begin{cases} 0, & U\le p,\\[2pt] \beta^{-1}\,\ln\dfrac{1-p}{1-U}, & U>p, \end{cases}
+\qquad U\sim\mathrm{Unif}(0,1),\quad p=\frac{\psi-1}{\psi+1},\quad \beta=\frac{1-p}{m}.
+\end{equation}
+The scheme is exact in its first two moments and, in the exponential branch that dominates the
+Feller-violated DM regime (\(2\kappa\theta\ll\varepsilon^2\)), places an honest atom at zero rather
+than reflecting a negative Euler draw. The leverage correlation is imposed by driving the level
+factor with the Brownian increment \(\rho\,\xi_1+\sqrt{1-\rho^2}\,Z_x\), where
+\(\xi_1=(V_{1,t+\Delta}-m_1)/s_1\) is the standardised innovation of the fast variance factor (exact
+in the quadratic branch, approximate in the exponential).
+
+\end{document}
