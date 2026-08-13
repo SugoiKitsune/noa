@@ -49,6 +49,18 @@ correlation), while keeping the model tractable for large-scale Monte Carlo cali
 purpose of this note is to document precisely \emph{what} process is fitted, \emph{how} the market
 data are fed in, and \emph{how well} the joint calibration reproduces the full surface.
 
+\paragraph{Contributions.} The construction combines five ingredients into one calibratable object.
+(i) A genuinely \emph{multi-curve} state (OIS discount + Euribor projection, coupled through a
+shared factor and a basis factor), so the smile is priced consistently across both curves.
+(ii) A \emph{lifted} stochastic variance---a two-factor CIR mixture that is a low-order Markovian
+lift, in the sense of Abi~Jaber and El~Euch~\cite{abijaber2019multi} and
+Cuchiero and Teichmann~\cite{cuchiero2019}, of a rough/multi-scale volatility---kept affine and
+directly simulable. (iii) A \emph{large-scale joint calibration}: one \(27\)-parameter vector fit to
+the entire caplet surface by GPU Monte Carlo and a gradient-free Adam--SPSA
+optimiser~\cite{spall1998,kingma2015}. (iv) The Andersen QE scheme~\cite{andersen2008} for the
+Feller-violated low-vol regime typical of developed markets. (v) A vega-weighted objective that
+targets the liquid core. We report the EUR fit and its robustness across USD and GBP.
+
 \section{The multi-curve model}
 
 \subsection{Why two curves}
@@ -72,9 +84,9 @@ In the EUR data the Euribor curve sits \(+9\) to \(+21\bp\) above OIS across mat
 6M-Euribor--OIS basis; see Section~4). Collapsing the two curves into one would misprice every
 caplet forward by this basis---an order of magnitude larger than the \(\sim\!\SI{2}{bp}\) fit we
 are trying to achieve---so the basis must be carried explicitly. This is the multi-curve framework
-of Bianchetti, Mercurio, and others; our contribution is to embed it inside an affine
-stochastic-volatility model so that the \emph{smile}, not just the forward, is priced consistently
-across both curves.
+of Bianchetti~\cite{bianchetti2010}, Mercurio~\cite{mercurio2010} and others; our contribution is to
+embed it inside an affine stochastic-volatility model so that the \emph{smile}, not just the
+forward, is priced consistently across both curves.
 
 \subsection{State dynamics}
 Let \(f_{\text{ois}}(t)\) and \(f_{\text{proj}}(t)\) denote the OIS (discount) and 6M-Euribor
@@ -97,9 +109,13 @@ V(t) &= w\,V_1(t) + (1-w)\,V_2(t), \\
 \quad i=1,2 .
 \end{align}
 The shared factor \(x\) carries a \emph{stochastic} instantaneous variance \(V\), built as a convex
-mixture of two Cox--Ingersoll--Ross (``lifted''/multi-factor CIR) variances with a fast and a slow
-mean-reversion (\(\kappa_1\equiv\kappa_f\), \(\kappa_2\equiv\kappa_s\)); this two-timescale
-construction is what lets a single parameter set bend across maturities. The Heston vol-of-vol
+mixture of two Cox--Ingersoll--Ross variances with a fast and a slow mean-reversion
+(\(\kappa_1\equiv\kappa_f\), \(\kappa_2\equiv\kappa_s\)); this two-timescale construction is what
+lets a single parameter set bend across maturities. Such a multi-factor CIR mixture is precisely a
+low-order \emph{Markovian lift}: a finite-dimensional, affine, simulable process whose weighted sum
+approximates a rough (or multi-scale) variance~\cite{abijaber2019multi,abijaber2019lifting,cuchiero2019}.
+Truncating to two factors keeps the model tractable for large-scale Monte Carlo calibration while
+retaining the two-timescale flexibility that a single CIR factor lacks. The Heston vol-of-vol
 \(\varepsilon\) generates smile \emph{curvature}, and a term structure of leverage correlations
 \(\rho(t)=\mathrm{corr}(\dW^{x},\dW^{v_1})\) generates the \emph{skew}. The long-run variance levels
 \(\theta_1(t),\theta_2(t)\) and the correlation \(\rho(t)\) are represented as monotone
@@ -383,5 +399,32 @@ than reflecting a negative Euler draw. The leverage correlation is imposed by dr
 factor with the Brownian increment \(\rho\,\xi_1+\sqrt{1-\rho^2}\,Z_x\), where
 \(\xi_1=(V_{1,t+\Delta}-m_1)/s_1\) is the standardised innovation of the fast variance factor (exact
 in the quadratic branch, approximate in the exponential).
+
+\begin{thebibliography}{9}
+\bibitem{abijaber2019multi} E.~Abi~Jaber and O.~El~Euch.
+  Multifactor approximation of rough volatility models.
+  \emph{SIAM Journal on Financial Mathematics}, 10(2):309--349, 2019.
+\bibitem{abijaber2019lifting} E.~Abi~Jaber.
+  Lifting the Heston model.
+  \emph{Quantitative Finance}, 19(12):1995--2013, 2019.
+\bibitem{cuchiero2019} C.~Cuchiero and J.~Teichmann.
+  Markovian lifts of positive semidefinite affine Volterra-type processes.
+  \emph{Decisions in Economics and Finance}, 42:407--448, 2019.
+\bibitem{andersen2008} L.~B.~G.~Andersen.
+  Simple and efficient simulation of the Heston stochastic volatility model.
+  \emph{Journal of Computational Finance}, 11(3):1--42, 2008.
+\bibitem{bianchetti2010} M.~Bianchetti.
+  Two curves, one price.
+  \emph{Risk}, 23(8):66--72, 2010.
+\bibitem{mercurio2010} F.~Mercurio.
+  Interest rates and the credit crunch: new formulas and market models.
+  Bloomberg Portfolio Research Paper No.\ 2010-01-FRONTIERS, 2010.
+\bibitem{spall1998} J.~C.~Spall.
+  Implementation of the simultaneous perturbation algorithm for stochastic optimization.
+  \emph{IEEE Transactions on Aerospace and Electronic Systems}, 34(3):817--823, 1998.
+\bibitem{kingma2015} D.~P.~Kingma and J.~Ba.
+  Adam: a method for stochastic optimization.
+  \emph{International Conference on Learning Representations (ICLR)}, 2015.
+\end{thebibliography}
 
 \end{document}
