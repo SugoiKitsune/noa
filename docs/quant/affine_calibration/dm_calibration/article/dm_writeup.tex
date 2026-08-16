@@ -10,8 +10,7 @@
 
 \title{\bfseries Multi-Curve Calibration of a Two-Factor Lifted-CIR\\
 Hull--White--Heston Model to Caplet Volatility Surfaces}
-\author{Andrey Popov\thanks{Moscow Institute of Physics and Technology (MIPT).
-Corresponding author. \emph{Affiliation and contact details to be completed.}}}
+\author{Roland Grinis \and Andrey Popov}
 \date{\today}
 
 \newcommand{\dW}{\,\mathrm{d}W}
@@ -49,10 +48,12 @@ caplet/cap calibration; normal (Bachelier) implied volatility; Monte Carlo; SPSA
 \section{Motivation}
 EUR caplet surfaces exhibit a pronounced, maturity-dependent smile: a
 convex ``payer'' wing at high strikes and a steep short-maturity slope that flattens with maturity.
-Any Gaussian short-rate model (one- or multi-factor Hull--White with a deterministic volatility
-term structure) produces a \emph{strike-flat} normal-volatility smile and therefore cannot, by
-construction, reproduce this curvature. Introducing an affine stochastic variance for the driving
-factor restores both the curvature (through the vol-of-vol) and the skew (through a leverage
+Any Gaussian short-rate model~\cite{vasicek1977,hullwhite1990,brigo2006,filipovic2009} (one- or multi-factor
+Hull--White with a deterministic volatility term structure) produces a \emph{strike-flat}
+normal-volatility smile and therefore cannot, by construction, reproduce this curvature. Introducing
+an affine stochastic variance~\cite{cir1985,heston1993,duffie2000} for the driving
+factor---as in the SABR~\cite{hagan2002} and stochastic-volatility literature---restores both the
+curvature (through the vol-of-vol) and the skew (through a leverage
 correlation), while keeping the model tractable for large-scale Monte Carlo calibration. The
 purpose of this note is to document precisely \emph{what} process is fitted, \emph{how} the market
 data are fed in, and \emph{how well} the joint calibration reproduces the full surface.
@@ -79,7 +80,8 @@ two curves: a \textbf{discount} curve (€STR/OIS) for the collateralised payoff
 \textbf{projection} curve (6M Euribor) for the floating rate it pays on. In the EUR data the two
 differ by \(+9\) to \(+21\bp\) (the Euribor--OIS basis); collapsing them mis-prices every forward by
 that amount---an order of magnitude above our few-bp fit target. This is the multi-curve framework
-of Bianchetti~\cite{bianchetti2010} and Mercurio~\cite{mercurio2010}; our contribution is to embed it
+of Bianchetti~\cite{bianchetti2010}, Mercurio~\cite{mercurio2010} and others~\cite{henrard2014,grbac2015};
+our contribution is to embed it
 in an affine stochastic-volatility model so the \emph{smile}, not just the forward, is priced
 consistently across both curves.
 
@@ -108,7 +110,7 @@ mixture of two Cox--Ingersoll--Ross variances with a fast and a slow mean-revers
 (\(\kappa_1\equiv\kappa_f\), \(\kappa_2\equiv\kappa_s\)); this two-timescale construction is what
 lets a single parameter set bend across maturities. Such a multi-factor CIR mixture is precisely a
 low-order \emph{Markovian lift}: a finite-dimensional, affine, simulable process whose weighted sum
-approximates a rough (or multi-scale) variance~\cite{abijaber2019multi,abijaber2019lifting,cuchiero2019}.
+approximates a rough (or multi-scale) variance~\cite{gatheral2018,eleuch2019,abijaber2019multi,abijaber2019lifting,abijaber2019volterra,cuchiero2019}.
 Truncating to two factors keeps the model tractable for large-scale Monte Carlo calibration while
 retaining the two-timescale flexibility that a single CIR factor lacks. The Heston vol-of-vol
 \(\varepsilon\) generates smile \emph{curvature}, and a term structure of leverage correlations
@@ -124,7 +126,7 @@ one-factor Gaussian Hull--White models. This nesting (Section~\ref{sec:ladder}) 
 apples-to-apples decomposition of the fit.
 
 \section{Instrument and volatility inversion}
-The calibration instruments are per-period (backward-looking / RFR-style) caplets. For a caplet
+The calibration instruments are per-period (backward-looking / RFR-style) caplets~\cite{lyashenko2019}. For a caplet
 fixing at \(t_{\text{fix}}\) with accrual \(\tau\) (EUR: \(\tau=0.5\)) and strike \(K\), the
 underlying is the average 6M~Euribor projection rate over the accrual window,
 \begin{equation}
@@ -159,7 +161,8 @@ caplets, fitted \emph{jointly} with one parameter vector.
 \section{Calibration}
 \paragraph{Simulation.} Paths are generated on a GPU with an \(O(N)\)-memory Monte Carlo (running
 integrals, never materialising the full path matrix for the pricing sums). The CIR variance
-factors are sampled with the Andersen (2008) quadratic-exponential (QE) scheme. In the low-vol
+factors are sampled with the Andersen (2008) quadratic-exponential (QE)
+scheme~\cite{andersen2008,broadie2006}. In the low-vol
 regime the CIR is strongly Feller-violated (\(2\kappa\theta\ll\varepsilon^2\)); an Euler scheme
 with reflection biases the variance upward---most severely at short maturities, where it inflated
 the \(0.5\)Y ATM volatility from a market level of \(44\bp\) to over \(100\bp\)---whereas QE is
@@ -396,7 +399,7 @@ factor with the Brownian increment \(\rho\,\xi_1+\sqrt{1-\rho^2}\,Z_x\), where
 in the quadratic branch, approximate in the exponential).
 
 \clearpage
-\begin{thebibliography}{9}
+\begin{thebibliography}{99}
 \bibitem{abijaber2019multi} E.~Abi~Jaber and O.~El~Euch.
   Multifactor approximation of rough volatility models.
   \emph{SIAM Journal on Financial Mathematics}, 10(2):309--349, 2019.
@@ -421,6 +424,47 @@ in the quadratic branch, approximate in the exponential).
 \bibitem{kingma2015} D.~P.~Kingma and J.~Ba.
   Adam: a method for stochastic optimization.
   \emph{International Conference on Learning Representations (ICLR)}, 2015.
+\bibitem{vasicek1977} O.~Vasicek.
+  An equilibrium characterization of the term structure.
+  \emph{Journal of Financial Economics}, 5(2):177--188, 1977.
+\bibitem{cir1985} J.~C.~Cox, J.~E.~Ingersoll, and S.~A.~Ross.
+  A theory of the term structure of interest rates.
+  \emph{Econometrica}, 53(2):385--407, 1985.
+\bibitem{hullwhite1990} J.~Hull and A.~White.
+  Pricing interest-rate-derivative securities.
+  \emph{Review of Financial Studies}, 3(4):573--592, 1990.
+\bibitem{heston1993} S.~L.~Heston.
+  A closed-form solution for options with stochastic volatility with applications to bond and currency options.
+  \emph{Review of Financial Studies}, 6(2):327--343, 1993.
+\bibitem{duffie2000} D.~Duffie, J.~Pan, and K.~Singleton.
+  Transform analysis and asset pricing for affine jump-diffusions.
+  \emph{Econometrica}, 68(6):1343--1376, 2000.
+\bibitem{brigo2006} D.~Brigo and F.~Mercurio.
+  \emph{Interest Rate Models---Theory and Practice}, 2nd edition. Springer, 2006.
+\bibitem{hagan2002} P.~S.~Hagan, D.~Kumar, A.~S.~Lesniewski, and D.~E.~Woodward.
+  Managing smile risk.
+  \emph{Wilmott Magazine}, 1:84--108, 2002.
+\bibitem{gatheral2018} J.~Gatheral, T.~Jaisson, and M.~Rosenbaum.
+  Volatility is rough.
+  \emph{Quantitative Finance}, 18(6):933--949, 2018.
+\bibitem{eleuch2019} O.~El~Euch and M.~Rosenbaum.
+  The characteristic function of rough Heston models.
+  \emph{Mathematical Finance}, 29(1):3--38, 2019.
+\bibitem{abijaber2019volterra} E.~Abi~Jaber, M.~Larsson, and S.~Pulido.
+  Affine Volterra processes.
+  \emph{Annals of Applied Probability}, 29(5):3155--3200, 2019.
+\bibitem{henrard2014} M.~Henrard.
+  \emph{Interest Rate Modelling in the Multi-curve Framework}. Palgrave Macmillan, 2014.
+\bibitem{grbac2015} Z.~Grbac and W.~J.~Runggaldier.
+  \emph{Interest Rate Modeling: Post-Crisis Challenges and Approaches}. Springer, 2015.
+\bibitem{lyashenko2019} A.~Lyashenko and F.~Mercurio.
+  Looking forward to backward-looking rates: a modeling framework for term rates replacing LIBOR.
+  \emph{Risk}, 2019.
+\bibitem{broadie2006} M.~Broadie and \"{O}.~Kaya.
+  Exact simulation of stochastic volatility and other affine jump diffusion processes.
+  \emph{Operations Research}, 54(2):217--231, 2006.
+\bibitem{filipovic2009} D.~Filipovi\'{c}.
+  \emph{Term-Structure Models: A Graduate Course}. Springer, 2009.
 \end{thebibliography}
 
 \end{document}
