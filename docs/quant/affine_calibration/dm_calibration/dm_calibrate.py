@@ -236,9 +236,10 @@ def calibrate(ccy, model, device, *, max_iter, n_paths, T_max=None, dt=1/52, max
         eval_loss, p0, n_params=space["n_params"], max_iter=max_iter,
         n_paths=n_paths, device=device, ckpt_path=ckpt)
     # final eval at HIGH paths -> clean saved surface (few paths leave MC noise at the
-    # short-TTM / far-OTM corners, which 'cuts down' cells in the plotted surface).
-    # 100k is enough for a clean surface and keeps the fine-dt final eval within GPU memory.
-    model_vol, F = predict(best_p, max(n_paths * 2, 100000), 7)
+    # short-TTM / far-OTM corners). Memory-aware: paths*steps is capped so the fine-dt / daily
+    # final eval stays within GPU memory (steps grow ~5x from weekly to daily).
+    final_paths = max(n_paths * 2, min(100000, int(6.0e7 / n)))
+    model_vol, F = predict(best_p, final_paths, 7)
     rmse = float(torch.sqrt(((model_vol - mkt) ** 2).mean()))
 
     os.makedirs(os.path.join(RUNS, "calibration_weights"), exist_ok=True)
