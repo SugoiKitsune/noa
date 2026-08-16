@@ -174,8 +174,8 @@ this fits the liquid ATM tightly and down-weights the near-intrinsic deep-ITM an
 whose quoted volatilities carry almost no vega and are numerically ill-defined. Optimisation uses a
 self-contained Adam--SPSA (simultaneous-perturbation) scheme---gradient-free, appropriate for the
 noisy, non-differentiable Monte Carlo objective---with cosine step/perturbation decay. The loss
-converges by \(\approx 150\) iterations and then oscillates at the SPSA noise floor
-(Figure~\ref{fig:conv}); the running best is retained.
+converges by \(\approx 150\) iterations and then oscillates at the SPSA noise floor; the running
+best is retained.
 
 \section{Results}
 \subsection{Goodness of fit}
@@ -309,13 +309,6 @@ follows the market smile.}
 \label{fig:ladder}
 \end{figure}
 
-\begin{figure}[t]
-\centering
-\includegraphics[width=0.7\textwidth]{fig_eur_convergence.png}
-\caption{Adam--SPSA training loop. The loss converges by \(\approx 150\) iterations and then
-oscillates at the stochastic-gradient noise floor; the running best (\(15\)--\(16\bp\)) is retained.}
-\label{fig:conv}
-\end{figure}
 
 \subsection{Cross-market robustness}
 To check that the fit is not an EUR artefact, the identical pipeline (QE simulation, vega-weighted
@@ -373,6 +366,7 @@ most informative remaining test; it requires bond reconstruction at the option e
 stochastic volatility (a conditional-Gaussian or nested-MC pricer), and is left as the natural next
 step.
 
+\clearpage
 \appendix
 \section{The quadratic-exponential (QE) variance scheme}
 Each CIR variance factor is advanced over a step \(\Delta\) with the Andersen (2008) QE scheme.
@@ -401,6 +395,7 @@ factor with the Brownian increment \(\rho\,\xi_1+\sqrt{1-\rho^2}\,Z_x\), where
 \(\xi_1=(V_{1,t+\Delta}-m_1)/s_1\) is the standardised innovation of the fast variance factor (exact
 in the quadratic branch, approximate in the exponential).
 
+\clearpage
 \begin{thebibliography}{9}
 \bibitem{abijaber2019multi} E.~Abi~Jaber and O.~El~Euch.
   Multifactor approximation of rough volatility models.
