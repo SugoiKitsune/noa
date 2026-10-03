@@ -20,6 +20,8 @@ Instrument conventions (Oct 2026, after Henrard 2026). --payoff auto picks
 and --surface picks the stripped target (vol_surface_lm.csv / _end.csv carry the
 in-arrears expiry texp; see caplet_stripper.py). --payoff arrears_avg with the
 default surface reproduces the pre-Oct runs. --init warm-starts from a checkpoint.
+--fit_curve adds the deterministic shift that makes the model reprice the initial
+discount and projection curves (see dm_sim_stream._price).
 
 Two documented differences from the sequential optimiser, neither affecting the
 estimator's form:
@@ -51,7 +53,7 @@ AUTO_PAYOFF = {"eur": "term", "usd": "arrears_comp", "gbp": "arrears_comp"}
 
 
 def build_objective(ccy, device, *, model="HWH", dt=0.02, max_mat=None, short_wt=1.5,
-                    payoff="arrears_avg", surface="vol_surface.csv"):
+                    payoff="arrears_avg", surface="vol_surface.csv", fit_curve=False):
     """Market tensors + a batched loss. The vega weighting mirrors
     dm_calibrate.make_eval_loss exactly; the gate checks the two agree."""
     tau = TENOR[ccy]
@@ -111,7 +113,8 @@ def build_objective(ccy, device, *, model="HWH", dt=0.02, max_mat=None, short_wt
         pv, F, D = simulate_price_streaming_batched(
             n_paths, timeline, m["theta_mat"], m["theta2_mat"], m["eps"], m["v0"],
             m["kf"], m["ks"], m["wf"], m["lam"], m["gam"], m["xi"], f_key, f_ois,
-            m["rho_mat"], i_fix, i_pay, tau_t, K_t, device, seed=seed, payoff=payoff)
+            m["rho_mat"], i_fix, i_pay, tau_t, K_t, device, seed=seed, payoff=payoff,
+            fit_curve=fit_curve)
         return implied_vol_bisect(pv, F, K_t, texp, tau_t, D) * 1e4, F
 
     def eval_batch(P, n_paths, seed):
@@ -132,10 +135,10 @@ def build_objective(ccy, device, *, model="HWH", dt=0.02, max_mat=None, short_wt
         print(f"  accrual window {w[0]} steps x dt={dt:.6f} = {w[0]*dt:.6f} "
               f"vs tau={tau} ({acc_err:.3f}% error)", flush=True)
 
-    print(f"  payoff={payoff}  surface={surface}", flush=True)
+    print(f"  payoff={payoff}  surface={surface}  fit_curve={fit_curve}", flush=True)
     return dict(eval_batch=eval_batch, predict=predict, mkt=mkt, caplets=caplets,
                 space=space, n=n, timeline=timeline, T_max=T_max, accrual_steps=w,
-                payoff=payoff, surface=surface)
+                payoff=payoff, surface=surface, fit_curve=fit_curve)
 
 
 # ----------------------------------------------------------------- optimiser
@@ -189,9 +192,9 @@ def adam_spsa_batched(eval_batch, p_init, *, n_params, max_iter=800, n_paths=163
 
 # ----------------------------------------------------------------- driver
 def calibrate(ccy, model, device, *, max_iter, n_paths, dt, max_mat, batch, tag,
-              payoff="arrears_avg", surface="vol_surface.csv", init=None):
+              payoff="arrears_avg", surface="vol_surface.csv", init=None, fit_curve=False):
     obj = build_objective(ccy, device, model=model, dt=dt, max_mat=max_mat,
-                          payoff=payoff, surface=surface)
+                          payoff=payoff, surface=surface, fit_curve=fit_curve)
     space, mkt = obj["space"], obj["mkt"]
     label = f"{model}_{tag}"
     if init:
@@ -217,7 +220,7 @@ def calibrate(ccy, model, device, *, max_iter, n_paths, dt, max_mat, batch, tag,
     torch.save({"p": best_p.cpu(), "loss": best_loss, "rmse_bp": rmse, "model": model,
                 "sim": "stream_batched", "ccy": ccy, "dt": dt, "max_mat": max_mat,
                 "n_paths": n_paths, "iters": max_iter, "history": hist,
-                "payoff": obj["payoff"], "surface": surface, "init": init,
+                "payoff": obj["payoff"], "surface": surface, "init": init, "fit_curve": fit_curve,
                 "final_paths": final_paths, "final_seed": 7}, out)
     res = obj["caplets"][["t_fix", "strike"]].copy()
     res["market_vol_bp"] = mkt.detach().cpu().numpy()
@@ -228,7 +231,7 @@ def calibrate(ccy, model, device, *, max_iter, n_paths, dt, max_mat, batch, tag,
         os.path.join(RUNS, f"history_{ccy}_{label}.csv"), index=False)
     print(f"  -> {label}: vol-RMSE = {rmse:.2f} bp  (final eval {final_paths} paths)", flush=True)
     return {"model": label, "dt": dt, "rmse_bp": round(rmse, 2), "loss": round(best_loss, 4),
-            "payoff": obj["payoff"], "surface": surface}
+            "payoff": obj["payoff"], "surface": surface, "fit_curve": fit_curve}
 
 
 def main():
@@ -246,13 +249,16 @@ def main():
     ap.add_argument("--surface", default="vol_surface.csv",
                     help="stripped target in data/<ccy>/ (e.g. vol_surface_lm.csv)")
     ap.add_argument("--init", default=None, help="checkpoint .pt to warm-start from")
+    ap.add_argument("--fit_curve", action="store_true",
+                    help="deterministic shift so the model reprices the initial curves")
     args = ap.parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tag = args.tag or ("daily" if args.dt < 0.01 else "weekly")
     print(f"device={device}  torch={torch.__version__}", flush=True)
     r = calibrate(args.ccy, args.model, device, max_iter=args.iters, n_paths=args.paths,
                   dt=args.dt, max_mat=args.max_mat, batch=args.batch, tag=tag,
-                  payoff=args.payoff, surface=args.surface, init=args.init)
+                  payoff=args.payoff, surface=args.surface, init=args.init,
+                  fit_curve=args.fit_curve)
     with open(os.path.join(RUNS, f"batched_{args.ccy}_{tag}.json"), "w") as f:
         json.dump(r, f, indent=2)
     print(json.dumps(r, indent=2))

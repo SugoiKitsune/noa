@@ -50,11 +50,13 @@ def main():
                     map_location=dev)
     payoff = ck.get("payoff", "arrears_avg")
     surface = ck.get("surface", "vol_surface.csv")
+    fit_curve = bool(ck.get("fit_curve", False))
     dt, max_mat = float(ck["dt"]), ck.get("max_mat", 10.0)
     print(f"{a.ccy}/{a.tag}: dt={dt:.6f} payoff={payoff} surface={surface} "
-          f"paths={a.paths} seeds={a.seeds}", flush=True)
+          f"fit_curve={fit_curve} paths={a.paths} seeds={a.seeds}", flush=True)
 
-    obj = B.build_objective(a.ccy, dev, dt=dt, max_mat=max_mat, payoff=payoff, surface=surface)
+    obj = B.build_objective(a.ccy, dev, dt=dt, max_mat=max_mat, payoff=payoff, surface=surface,
+                            fit_curve=fit_curve)
     c = obj["caplets"]
     mkt = obj["mkt"].cpu().numpy()
     p = ck["p"].to(dev).unsqueeze(0)
@@ -95,6 +97,7 @@ def main():
     summ = {k: {"mean": round(float(df[k].mean()), 2), "std": round(float(df[k].std(ddof=1)), 2)}
             for k in df.columns if k != "seed"}
     meta = dict(ccy=a.ccy, tag=a.tag, dt=dt, payoff=payoff, surface=surface, max_mat=max_mat,
+                fit_curve=fit_curve,
                 n_caplets=int(len(c)), paths=a.paths, seeds=a.seeds,
                 train_rmse_bp=ck.get("rmse_bp"), iters=ck.get("iters"), init=ck.get("init"))
     os.makedirs(OUT, exist_ok=True)

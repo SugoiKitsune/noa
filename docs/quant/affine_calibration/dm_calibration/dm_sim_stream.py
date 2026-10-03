@@ -103,8 +103,8 @@ def _window_factor(rate64, n_win, dt):
     return dt * num / den
 
 
-def _underlying(payoff, dIkey, tau_t, x_fix=None, k_fix=None, I_det=None, Bx=None, Bk=None):
-    """Caplet underlying from the accrual-window quantities.
+def _log_growth(payoff, dIkey, x_fix=None, k_fix=None, I_det=None, Bx=None, Bk=None):
+    """Exponent g of the caplet rate R = (exp(g) - 1)/tau (not used for arrears_avg).
 
     arrears_avg  : (1/tau) * integral of r_proj over the window -- the legacy payoff.
     arrears_comp : (exp(integral) - 1)/tau -- daily-compounded in-arrears RFR rate
@@ -116,20 +116,56 @@ def _underlying(payoff, dIkey, tau_t, x_fix=None, k_fix=None, I_det=None, Bx=Non
                    whatever the variance path does after t_fix (Henrard 2026, s.3.6/5.2.5:
                    continuously-compounded additive spread over the collateral curve).
     """
-    if payoff == "arrears_avg":
-        return dIkey / tau_t
     if payoff == "arrears_comp":
-        return torch.expm1(dIkey) / tau_t
+        return dIkey
     if payoff == "term":
-        return torch.expm1(I_det + x_fix * Bx + k_fix * Bk) / tau_t
+        return I_det + x_fix * Bx + k_fix * Bk
     raise ValueError(payoff)
+
+
+def _price(payoff, dIkey, Iois_pay, tau_t, K_t, dim, fit_curve=False,
+           f_key_vec=None, f_ois_vec=None, i_fix=None, i_pay=None, dt=None, term_args=None):
+    """(pv, F, D) from the per-path window quantities; `dim` is the path axis.
+
+    fit_curve: deterministic shift phi(t) so the model reprices the initial curves
+    (Brigo-Mercurio-style extension, computed on the path set because the variance
+    is stochastic). The factors are added to the market forwards with no convexity
+    term, so E[exp(-int x)] > 1 and the raw model forward sits below the market
+    forward (~20-35bp at 10Y). phi never enters the dynamics, only the integrals:
+      discount   : int_0^T phi_ois = ln E[exp(-int_0^T x)]  ->  D(T) = P_mkt(T);
+      projection : int_fix^pay phi_proj = c, one constant per caplet, solved in closed
+                   form so that E[R disc]/D equals the market simple forward.
+    The discount shift rescales pv and D alike, so it leaves implied vols unchanged;
+    the projection shift moves the forward and hence where each strike sits.
+    """
+    disc = torch.exp(-Iois_pay)
+    if payoff == "arrears_avg":
+        assert not fit_curve, "curve fit is defined for the compounded/term payoffs"
+        A = dIkey / tau_t
+    else:
+        g = _log_growth(payoff, dIkey, **(term_args or {}))
+        if fit_curve:
+            cum = lambda f: torch.cat([torch.zeros(1, dtype=torch.float64, device=f.device),
+                                       torch.cumsum(f[:int(i_pay.max())].to(torch.float64) * dt, 0)])
+            cf_o, cf_k = cum(f_ois_vec), cum(f_key_vec)
+            P_mkt = torch.exp(-cf_o[i_pay]).to(disc.dtype)                     # grid market DF
+            disc = disc * (P_mkt / disc.mean(dim, keepdim=True))                 # exp(-Psi(pay))
+            lnF1 = (cf_k[i_pay] - cf_k[i_fix]).to(disc.dtype)                   # ln(1 + tau F_mkt)
+            D_ = disc.mean(dim, keepdim=True)
+            c = lnF1 + torch.log(D_) - torch.log((torch.exp(g) * disc).mean(dim, keepdim=True))
+            g = g + c
+        A = torch.expm1(g) / tau_t
+    D = disc.mean(dim)
+    F = (A * disc).mean(dim) / D.clamp(min=1e-12)
+    pv = (torch.clamp(A - K_t, min=0.0) * tau_t * disc).mean(dim)
+    return pv, F, D
 
 # ----------------------------------------------------------------- driver
 def simulate_price_streaming(n_paths, timeline, theta_vec, theta2_vec, eps, v0,
                              kf, ks, wf, lam, gam, xi, f_key_vec, f_ois_vec,
                              rho_vec, i_fix, i_pay, tau_t, K_t, device,
                              seed=None, antithetic=True, chunk=512, rands=None,
-                             payoff="arrears_avg"):
+                             payoff="arrears_avg", fit_curve=False):
     """Simulate and price the caplets in one pass. Returns (pv, F, D), matching
     dm_calibrate.price_perperiod applied to dm_sim_qe.simulate_2factor_qe output
     for the default payoff; see _underlying for the others."""
@@ -204,14 +240,11 @@ def simulate_price_streaming(n_paths, timeline, theta_vec, theta2_vec, eps, v0,
         f64 = lambda a: torch.tensor(a, dtype=torch.float64, device=device)
         Bx = _window_factor(f64(lam_f), n_win, dt).to(torch.float32)
         Bk = _window_factor(f64(gam_f), n_win, dt).to(torch.float32)
-        A = _underlying(payoff, dIkey, tau_t, Bxs[:, col_fix], Bks[:, col_fix], I_det, Bx, Bk)
+        targs = dict(x_fix=Bxs[:, col_fix], k_fix=Bks[:, col_fix], I_det=I_det, Bx=Bx, Bk=Bk)
     else:
-        A = _underlying(payoff, dIkey, tau_t)
-    disc = torch.exp(-Bois[:, col_pay])
-    D = disc.mean(0)
-    F = (A * disc).mean(0) / D.clamp(min=1e-12)
-    pv = (torch.clamp(A - K_t, min=0.0) * tau_t * disc).mean(0)
-    return pv, F, D
+        targs = None
+    return _price(payoff, dIkey, Bois[:, col_pay], tau_t, K_t, 0, fit_curve,
+                  f_key_vec, f_ois_vec, i_fix, i_pay, dt, targs)
 
 
 # ----------------------------------------------------------------- batched
@@ -274,7 +307,7 @@ def simulate_price_streaming_batched(n_paths, timeline, theta_mat, theta2_mat, e
                                      f_key_vec, f_ois_vec, rho_mat,
                                      i_fix, i_pay, tau_t, K_t, device,
                                      seed=None, antithetic=True, chunk=128, rands=None,
-                                     payoff="arrears_avg"):
+                                     payoff="arrears_avg", fit_curve=False):
     """K parameter sets stepped through ONE loop.
 
     Because the cost is kernel-launch bound, K members cost about the same wall
@@ -359,12 +392,8 @@ def simulate_price_streaming_batched(n_paths, timeline, theta_mat, theta2_mat, e
         n_win = i_pay - i_fix
         Bx = _window_factor(lam64, n_win, dt).to(torch.float32).unsqueeze(1)   # (K,1,n_cpl)
         Bk = _window_factor(gam64, n_win, dt).to(torch.float32).unsqueeze(1)
-        A = _underlying(payoff, dIkey, tau_t, Bxs[:, :, col_fix], Bks[:, :, col_fix],
-                        I_det, Bx, Bk)
+        targs = dict(x_fix=Bxs[:, :, col_fix], k_fix=Bks[:, :, col_fix], I_det=I_det, Bx=Bx, Bk=Bk)
     else:
-        A = _underlying(payoff, dIkey, tau_t)
-    disc = torch.exp(-Bois[:, :, col_pay])
-    D = disc.mean(1)
-    F = (A * disc).mean(1) / D.clamp(min=1e-12)
-    pv = (torch.clamp(A - K_t, min=0.0) * tau_t * disc).mean(1)
-    return pv, F, D
+        targs = None
+    return _price(payoff, dIkey, Bois[:, :, col_pay], tau_t, K_t, 1, fit_curve,
+                  f_key_vec, f_ois_vec, i_fix, i_pay, dt, targs)
