@@ -9,7 +9,7 @@ Only markets whose results exist are included.
 
 Run:  <python> cross_market.py
 """
-import os, sys
+import os, sys, argparse
 import numpy as np, pandas as pd, matplotlib
 matplotlib.use("Agg"); import matplotlib.pyplot as plt
 
@@ -19,15 +19,23 @@ OUT = os.path.join(HERE, "results"); os.makedirs(OUT, exist_ok=True)
 MKTS = [("eur", "EUR", "6M Euribor (IBOR)"), ("usd", "USD", "3M SOFR (RFR)"),
         ("gbp", "GBP", "3M SONIA (RFR)")]
 
+_ap = argparse.ArgumentParser()
+_ap.add_argument("--tag", default="qe", help="results_<ccy>_HWH_<tag>.csv to read")
+_TAG = _ap.parse_args().tag
+
 rows, present = [], []
 for ccy, LBL, underlying in MKTS:
-    p = os.path.join(RUNS, f"results_{ccy}_HWH_qe.csv")
+    p = os.path.join(RUNS, f"results_{ccy}_HWH_{_TAG}.csv")
     if not os.path.exists(p):
         continue
     r = pd.read_csv(p); r["strike"] = r.strike.astype(float)
     err = r.model_vol_bp - r.market_vol_bp
-    atm = r[(r.strike - r.F).abs() < 0.003].groupby("t_fix").apply(
-        lambda g: g.model_vol_bp.mean() - g.market_vol_bp.mean(), include_groups=False)
+    # ATM = the single strike nearest the forward at each maturity. A fixed band
+    # (e.g. |K-F|<30bp) can catch several strikes or none depending on the ladder,
+    # which made GBP disagree with the per-caplet metric.
+    atm = r.loc[r.groupby("t_fix").apply(
+        lambda g: (g.strike - g.F).abs().idxmin(), include_groups=False)]
+    atm = atm.model_vol_bp - atm.market_vol_bp
     liq = r[(r.strike - r.F).abs() < 0.02]
     rmse = lambda s: float(np.sqrt((s ** 2).mean()))
     rows.append({

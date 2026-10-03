@@ -256,13 +256,16 @@ def main():
     curves[("eur", "key")] = e6_dfs
     curves[("gbp", "key")] = curves[("gbp", "ois")]          # SONIA single-curve
 
-    # USD FF composite par set
+    # USD: the caplets are on SOFR, so they project on SOFR (single-curve, like GBP).
+    # The FF composite (outright FF OIS + FF-SOFR basis) is kept as forward_ff.csv for
+    # reference only -- a SOFR caplet has no exposure to the FF-SOFR basis.
+    curves[("usd", "key")] = curves[("usd", "ois")]
     sofr_par = dict(sofr["swaps"])
     ff_pillars = list(ff_sw)
     for T, b in ff_basis:
         if T in sofr_par:
             ff_pillars.append((T, sofr_par[T] + b / 100.0))
-    curves[("usd", "key")] = bootstrap_ois(sorted(set(ff_pillars)), act360=True)
+    ff_curve = bootstrap_ois(sorted(set(ff_pillars)), act360=True)
 
     # --- emit
     for ccy in ("eur", "gbp", "usd"):
@@ -274,6 +277,11 @@ def main():
                 fh.write("time_to_maturity,forward_rate\n")
                 for t, v in zip(GRID, f):
                     fh.write(f"{t:.6f},{v:.8f}\n")     # already decimal
+        if ccy == "usd":                               # pre-Oct-2026 USD projection curve
+            with open(os.path.join(d, "forward_ff.csv"), "w") as fh:
+                fh.write("time_to_maturity,forward_rate\n")
+                for t, v in zip(GRID, forwards_from_dfs(ff_curve)):
+                    fh.write(f"{t:.6f},{v:.8f}\n")
 
         capv = parse_capv(wb[f"{ccy.upper()}_VCUB_CAPV_300626"])
         with open(os.path.join(d, "cap_vol_surface.csv"), "w") as fh:

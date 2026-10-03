@@ -49,10 +49,15 @@ def load_curve_vec(ccy, role, timeline):
     return np.interp(timeline.cpu().numpy(), d.time_to_maturity.values, d.forward_rate.values)
 
 
-def load_market(ccy, device, atm_only=False, kmin=None, kmax=None, max_mat=None):
-    """Return caplets DataFrame (t_fix, strike, sigma_mkt_bp) from the stripped surface.
-    max_mat caps the caplet maturity (shortens the MC timeline -> much faster runs)."""
-    d = pd.read_csv(os.path.join(DATA, ccy, "vol_surface.csv"))
+def load_market(ccy, device, atm_only=False, kmin=None, kmax=None, max_mat=None,
+                surface="vol_surface.csv"):
+    """Return caplets DataFrame (t_fix, strike, sigma_mkt_bp, texp) from the stripped surface.
+    max_mat caps the caplet maturity (shortens the MC timeline -> much faster runs).
+    texp is the Bachelier expiry: t_fix unless the surface carries texp_yrs (RFR strips)."""
+    d = pd.read_csv(os.path.join(DATA, ccy, surface))
+    if "texp_yrs" not in d.columns:
+        d["texp_yrs"] = d["t_fix_yrs"]
+    d = d.rename(columns={"texp_yrs": "texp"})
     d = d[d.strike != "ATM"].copy() if not atm_only else d[d.strike == "ATM"].copy()
     if not atm_only:
         d["strike"] = d["strike"].astype(float)
@@ -238,7 +243,7 @@ def calibrate(ccy, model, device, *, max_iter, n_paths, T_max=None, dt=1/52, max
     # final eval at HIGH paths -> clean saved surface (few paths leave MC noise at the
     # short-TTM / far-OTM corners). Memory-aware: paths*steps is capped so the fine-dt / daily
     # final eval stays within GPU memory (steps grow ~5x from weekly to daily).
-    final_paths = max(n_paths * 2, min(100000, int(6.0e7 / n)))
+    final_paths = min(100000, int(6.0e7 / n))
     model_vol, F = predict(best_p, final_paths, 7)
     rmse = float(torch.sqrt(((model_vol - mkt) ** 2).mean()))
 

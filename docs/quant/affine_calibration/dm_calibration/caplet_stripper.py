@@ -16,8 +16,21 @@ with F the simple forward key rate over [t_fix, t_fix+tau], D the OIS discount t
 Output: data/<ccy>/vol_surface.csv  (t_fix_yrs, strike, sigma_N_bp)  -- the calibration target.
 Also derives the ATM caplet vols by interpolating the stripped surface at each caplet's forward.
 
-Run:  python caplet_stripper.py
+RFR caps (SOFR/SONIA, --expiry end|lm). The IBOR schedule above is wrong for an
+in-arrears cap in two ways (Henrard 2026, s.5.5 and 7.12): the first period [0,tau]
+is not fixed at trade date, so it is a live caplet and belongs in the cap; and the
+rate keeps setting until t_fix+tau, so the option expiry is not t_fix. With
+--expiry the first caplet is included and each caplet carries an explicit expiry
+texp_yrs used in place of t_fix in the Bachelier formula:
+    end : texp = t_fix + tau            (variance to the end of accrual)
+    lm  : texp = t_fix + tau/3          (Lyashenko-Mercurio linear decay; Henrard eq. 5.16)
+Written to data/<ccy>/vol_surface_<expiry>.csv; vol_surface.csv is left alone.
+Which one matches the Bloomberg VCUB flat-vol convention must be confirmed.
+
+Run:  python caplet_stripper.py                         (legacy: all three, IBOR schedule)
+      python caplet_stripper.py --ccy usd gbp --expiry lm
 """
+import argparse
 import os
 import numpy as np
 import pandas as pd
@@ -53,6 +66,11 @@ def simple_forward(ln_df_key, t0, t1):
 
 
 # ------------------------------------------------------------------ pricing
+EXPIRY = {"start": lambda tf, tau: tf,
+          "end": lambda tf, tau: tf + tau,
+          "lm": lambda tf, tau: tf + tau / 3.0}
+
+
 def bachelier_caplet(F, K, sigma, t_fix, tau, disc):
     if sigma <= 0 or t_fix <= 0:
         return disc * tau * max(F - K, 0.0)
@@ -61,23 +79,27 @@ def bachelier_caplet(F, K, sigma, t_fix, tau, disc):
     return disc * tau * ((F - K) * norm.cdf(d) + v * norm.pdf(d))
 
 
-def caplet_schedule(T_cap, tau):
-    """Fixings tau, 2tau, ..., T-tau (first period [0,tau] excluded); pay at fix+tau."""
+def caplet_schedule(T_cap, tau, first=False):
+    """Fixings tau, 2tau, ..., T-tau; pay at fix+tau. The first period [0,tau] is
+    excluded (IBOR: fixed at trade date) unless first=True (in-arrears RFR)."""
     n = int(round(T_cap / tau))
-    return [(j * tau, (j + 1) * tau) for j in range(1, n)]     # (t_fix, t_pay)
+    return [(j * tau, (j + 1) * tau) for j in range(0 if first else 1, n)]   # (t_fix, t_pay)
 
 
-def cap_price(T_cap, K, sigma_flat, tau, fwd, disc):
+def cap_price(T_cap, K, sigma_flat, tau, fwd, disc, expiry="start"):
     """Price a flat cap: all its caplets at the single vol sigma_flat."""
     px = 0.0
-    for t_fix, t_pay in caplet_schedule(T_cap, tau):
-        px += bachelier_caplet(fwd[t_fix], K, sigma_flat, t_fix, tau, disc[t_pay])
+    for t_fix, t_pay in caplet_schedule(T_cap, tau, first=expiry != "start"):
+        px += bachelier_caplet(fwd[t_fix], K, sigma_flat, EXPIRY[expiry](t_fix, tau),
+                               tau, disc[t_pay])
     return px
 
 
 # ------------------------------------------------------------------ stripping
-def strip_currency(ccy, verbose=True):
+def strip_currency(ccy, verbose=True, expiry="start"):
     tau = TENOR[ccy]
+    first = expiry != "start"
+    tex = lambda tf: EXPIRY[expiry](tf, tau)
     ln_ois = load_df(ccy, "ois")
     ln_key = load_df(ccy, "key")
 
@@ -88,7 +110,7 @@ def strip_currency(ccy, verbose=True):
     strikes = sorted(abs_rows.strike.unique())
 
     # precompute forwards / discounts on the full fixing grid
-    all_fix = sorted({tf for T in mats for tf, _ in caplet_schedule(T, tau)})
+    all_fix = sorted({tf for T in mats for tf, _ in caplet_schedule(T, tau, first)})
     fwd = {tf: simple_forward(ln_key, tf, tf + tau) for tf in all_fix}
     disc = {tf + tau: float(np.exp(ln_ois(tf + tau))) for tf in all_fix}
 
@@ -100,17 +122,17 @@ def strip_currency(ccy, verbose=True):
                 for T in mats if not abs_rows[(abs_rows.maturity_yrs == T) &
                 (abs_rows.strike == K)].empty}
         # market cap prices from flat vols
-        capP = {T: cap_price(T, K, vols[T], tau, fwd, disc) for T in vols}
+        capP = {T: cap_price(T, K, vols[T], tau, fwd, disc, expiry) for T in vols}
         prev_T, prev_P = 0.0, 0.0
         sigma_prev = vols[min(vols)]
         for T in sorted(vols):
-            bucket = [(tf, tp) for tf, tp in caplet_schedule(T, tau) if tp > prev_T + 1e-9]
+            bucket = [(tf, tp) for tf, tp in caplet_schedule(T, tau, first) if tp > prev_T + 1e-9]
             target = capP[T] - prev_P
             if not bucket or target <= 1e-14:
                 sigma_i = sigma_prev
             else:
                 def resid(s):
-                    return sum(bachelier_caplet(fwd[tf], K, s, tf, tau, disc[tp])
+                    return sum(bachelier_caplet(fwd[tf], K, s, tex(tf), tau, disc[tp])
                                for tf, tp in bucket) - target
                 try:
                     sigma_i = brentq(resid, 1e-6, 0.20, xtol=1e-10, maxiter=200)
@@ -123,11 +145,11 @@ def strip_currency(ccy, verbose=True):
         # validation: reprice each flat cap from stripped caplet vols
         strp = {tf: s / 1e4 for tf, kk, s in out if kk == K}
         for T in vols:
-            rp = sum(bachelier_caplet(fwd[tf], K, strp[tf], tf, tau, disc[tp])
-                     for tf, tp in caplet_schedule(T, tau))
+            rp = sum(bachelier_caplet(fwd[tf], K, strp[tf], tex(tf), tau, disc[tp])
+                     for tf, tp in caplet_schedule(T, tau, first))
             # back out flat vol of the repriced cap and compare
             def rv(s):
-                return cap_price(T, K, s, tau, fwd, disc) - rp
+                return cap_price(T, K, s, tau, fwd, disc, expiry) - rp
             try:
                 flat_rp = brentq(rv, 1e-6, 0.20) * 1e4
                 worst = max(worst, abs(flat_rp - vols[T] * 1e4))
@@ -150,19 +172,27 @@ def strip_currency(ccy, verbose=True):
         strip_df.assign(fwd=strip_df.t_fix_yrs.map(fwd)),
         pd.DataFrame(atm_rows, columns=["t_fix_yrs", "strike", "sigma_N_bp", "fwd"]),
     ], ignore_index=True)
-    final.to_csv(os.path.join(DATA, ccy, "vol_surface.csv"), index=False)
+    if first:
+        final["texp_yrs"] = final.t_fix_yrs.map(tex)
+    name = "vol_surface.csv" if expiry == "start" else f"vol_surface_{expiry}.csv"
+    final.to_csv(os.path.join(DATA, ccy, name), index=False)
 
     if verbose:
         n_abs = (final.strike != "ATM").sum()
-        print(f"[{ccy}] tau={tau}  fixings={len(all_fix)}  strikes={len(strikes)}  "
+        print(f"[{ccy}] expiry={expiry}  tau={tau}  fixings={len(all_fix)}  strikes={len(strikes)}  "
               f"caplet pts={n_abs} (+{len(atm_rows)} ATM)  "
               f"flat-cap reprice max err={worst:.3f} bp")
     return final
 
 
 def main():
-    for ccy in ("eur", "gbp", "usd"):
-        strip_currency(ccy)
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--ccy", nargs="+", default=["eur", "gbp", "usd"])
+    ap.add_argument("--expiry", default="start", choices=list(EXPIRY),
+                    help="start = IBOR schedule (legacy); end/lm = in-arrears RFR")
+    a = ap.parse_args()
+    for ccy in a.ccy:
+        strip_currency(ccy, expiry=a.expiry)
 
 
 if __name__ == "__main__":
