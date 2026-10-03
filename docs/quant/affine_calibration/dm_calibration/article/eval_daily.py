@@ -8,6 +8,10 @@ dm_writeup.tex: the numbers there should be copied from results/eval_<ccy>_<tag>
 
   ATM          = at each t_fix, the strike nearest the MARKET forward (surface `fwd`)
   liquid core  = |K - F_mkt| < 2%
+  *_ge05       = the same restricted to t_fix >= 0.5y. For the RFR markets the first
+                 caplet (t_fix=0, effective expiry ~1M) has near-intrinsic wings whose
+                 implied vols are numerically ill-defined; the paper's RFR headline uses
+                 t_fix >= 0.5y and reports the first caplet separately.
 
 Writes (committable, aggregate only -- no per-caplet market vols):
   article/results/eval_<ccy>_<tag>.json / .md
@@ -63,6 +67,12 @@ def main():
     core = np.abs(K - F_mkt) < 0.02
     atm = np.array([np.where(tf == t)[0][np.argmin(np.abs(K[tf == t] - fmkt[t]))]
                     for t in np.unique(tf)])
+    ge = tf >= 0.5 - 1e-9
+    atm_ge = atm[tf[atm] >= 0.5 - 1e-9]
+    buckets = {"0-0.25": tf < 0.5 - 1e-9, "0.5-1": (tf >= 0.5 - 1e-9) & (tf <= 1 + 1e-9),
+               "1-3": (tf > 1 + 1e-9) & (tf <= 3 + 1e-9), "3-7": (tf > 3 + 1e-9) & (tf <= 7 + 1e-9),
+               "7-10": tf > 7 + 1e-9}
+    rmse = lambda x: float(np.sqrt((x ** 2).mean())) if x.size else float("nan")
 
     rows, vols, Fs = [], [], []
     for s in a.seeds:
@@ -70,16 +80,20 @@ def main():
             v, F = obj["predict"](p, a.paths, s)
         v = v[0].cpu().numpy(); vols.append(v); Fs.append(F[0].cpu().numpy())
         e = v - mkt
-        rows.append(dict(seed=s, rmse_bp=float(np.sqrt((e ** 2).mean())),
-                         atm_mae_bp=float(np.abs(e[atm]).mean()),
-                         core_rmse_bp=float(np.sqrt((e[core] ** 2).mean()))))
-        print(f"  seed {s}: RMSE {rows[-1]['rmse_bp']:.2f}  ATM MAE {rows[-1]['atm_mae_bp']:.2f}  "
-              f"core {rows[-1]['core_rmse_bp']:.2f}", flush=True)
+        row = dict(seed=s, rmse_bp=rmse(e), atm_mae_bp=float(np.abs(e[atm]).mean()),
+                   core_rmse_bp=rmse(e[core]), rmse_ge05_bp=rmse(e[ge]),
+                   atm_mae_ge05_bp=float(np.abs(e[atm_ge]).mean()),
+                   core_rmse_ge05_bp=rmse(e[core & ge]))
+        row.update({f"rmse_{k}_bp": rmse(e[m]) for k, m in buckets.items() if m.any()})
+        rows.append(row)
+        print(f"  seed {s}: RMSE {row['rmse_bp']:.2f}  ATM MAE {row['atm_mae_bp']:.2f}  "
+              f"core {row['core_rmse_bp']:.2f}  | t>=0.5: RMSE {row['rmse_ge05_bp']:.2f}  "
+              f"ATM {row['atm_mae_ge05_bp']:.2f}  core {row['core_rmse_ge05_bp']:.2f}", flush=True)
         torch.cuda.empty_cache() if dev.type == "cuda" else None
 
     df = pd.DataFrame(rows)
     summ = {k: {"mean": round(float(df[k].mean()), 2), "std": round(float(df[k].std(ddof=1)), 2)}
-            for k in ("rmse_bp", "atm_mae_bp", "core_rmse_bp")}
+            for k in df.columns if k != "seed"}
     meta = dict(ccy=a.ccy, tag=a.tag, dt=dt, payoff=payoff, surface=surface, max_mat=max_mat,
                 n_caplets=int(len(c)), paths=a.paths, seeds=a.seeds,
                 train_rmse_bp=ck.get("rmse_bp"), iters=ck.get("iters"), init=ck.get("init"))

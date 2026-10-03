@@ -24,6 +24,8 @@ A = ap.parse_args()
 
 res = pd.read_csv(os.path.join(RUNS, f"results_{A.ccy}_HWH_{A.tag}.csv"))
 res["strike"] = res.strike.astype(float)
+if "F_mkt" in res:                                         # eval_daily output: ATM/core on the market forward
+    res["F"] = res["F_mkt"]
 err = (res.model_vol_bp - res.market_vol_bp).values
 core = (res.strike - res.F).abs().values < 0.02
 rmse = float(np.sqrt((err ** 2).mean()))

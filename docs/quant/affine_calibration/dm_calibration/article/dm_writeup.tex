@@ -16,6 +16,7 @@ Hull--White--Heston Model to Caplet Volatility Surfaces}
 \newcommand{\dW}{\,\mathrm{d}W}
 \newcommand{\dt}{\,\mathrm{d}t}
 \newcommand{\bp}{\,\text{bp}}
+\newcommand{\doi}[1]{\href{https://doi.org/#1}{doi:\nolinkurl{#1}}}
 
 \begin{document}
 \maketitle
@@ -25,17 +26,20 @@ We calibrate a multi-curve, two-factor \emph{lifted}-CIR stochastic-volatility s
 (a Hull--White--Heston, HWH, construction) jointly to the entire EUR caplet normal-volatility
 surface. The state is driven by a shared level factor with stochastic variance and a Hull--White
 basis factor separating the projection curve from the OIS discount curve. Caplets are priced by
-GPU Monte Carlo on the average forward rate over each accrual period and inverted to Bachelier
-(normal) volatilities with a partial-year (\(\sqrt{t_{\text{fix}}}\)) convention that matches the
-quoting basis. The CIR variance factors are sampled with the Andersen (2008) quadratic-exponential
+GPU Monte Carlo on the instrument each market actually trades---a forward-looking Euribor term
+rate in EUR, a compounded in-arrears overnight rate in USD and GBP---and inverted to Bachelier
+(normal) volatilities on the matching expiry convention. The CIR variance factors are sampled with the Andersen (2008) quadratic-exponential
 (QE) scheme, and the 27 parameters are estimated with a gradient-free Adam--SPSA optimiser under a
 vega-weighted objective. Against 340 caplets spanning maturities \(0.5\)--\(10\)Y and strikes
-\(-1.5\%\) to \(+10\%\), the model attains an overall normal-volatility RMSE of \(9.4\bp\), an
-at-the-money (ATM) mean absolute error of \(2.9\bp\), and a \(4.2\bp\) RMSE over the liquid
-(\(|K-F|<2\%\)) core. A nested-model ladder shows that stochastic volatility is responsible for the
-bulk of the fit: the best flat-smile Gaussian restriction attains only \(\approx 45\bp\). The same
-model and calibration reproduce the USD (SOFR) and GBP (SONIA) caplet surfaces to comparable
-accuracy across the IBOR and RFR markets.
+\(-1.5\%\) to \(+10\%\), the model attains an overall normal-volatility RMSE of \(6.3\bp\), an
+at-the-money (ATM) mean absolute error of \(2.4\bp\), and a \(3.7\bp\) RMSE over the liquid
+(\(|K-F|<2\%\)) core. Pricing the Euribor caplet as the forward-looking contract it is, rather than
+as an in-arrears average, cuts the EUR error from \(8.6\) to \(6.3\bp\), with the gain spread across
+the \(1\)--\(10\)Y smile. Simulation is on a \emph{daily} grid (\(dt=1/252\)), on which every accrual
+window is a whole number of steps. A nested-model ladder shows that stochastic volatility is
+responsible for the bulk of the fit: the best flat-smile Gaussian restriction attains only
+\(\approx 45\bp\). The same model reproduces the USD (SOFR) and GBP (SONIA) in-arrears caplet
+surfaces from \(6\)M maturity out to \(7.6\) and \(7.8\bp\), with ATM errors of \(2.7\) and \(4.7\bp\).
 \end{abstract}
 
 \medskip
@@ -70,6 +74,70 @@ optimiser~\cite{spall1998,kingma2015}. (iv) The Andersen QE scheme~\cite{anderse
 Feller-violated low-vol regime typical of the current low-rate environment. (v) A vega-weighted objective that
 targets the liquid core. We report the EUR fit and its robustness across USD and GBP.
 
+\section{Related literature}
+\label{sec:lit}
+\paragraph{Stochastic volatility in term-structure models.} Gaussian short-rate
+models~\cite{vasicek1977,hullwhite1990} and their HJM generalisation~\cite{hjm1992} give
+strike-flat normal smiles. Making the short-rate variance a state variable goes back to
+Fong and Vasicek~\cite{fongvasicek1991} and Longstaff and Schwartz~\cite{longstaffschwartz1992}.
+Collin-Dufresne and Goldstein~\cite{collindufresne2002} documented that cap and swaption
+volatility is driven by factors that bonds do not span, which is the empirical case for a
+separate variance factor rather than a richer Gaussian one; our nested ladder
+(Section~\ref{sec:ladder}) reaches the same conclusion on the caplet surface. Trolle and
+Schwartz~\cite{trolleschwartz2009} built a multi-factor HJM model with unspanned stochastic
+volatility and leverage and calibrated it to caps and swaptions; it is the closest
+term-structure benchmark to ours. In practice the Markovian (quasi-Gaussian) form of HJM due to
+Cheyette~\cite{cheyette1992} and Ritchken and Sankarasubramanian~\cite{ritchken1995}, extended
+with a CIR variance multiplier, is the standard stochastic-volatility short-rate model; Andersen
+and Piterbarg~\cite{andersenpiterbarg2010} give the full treatment, including Monte Carlo
+discretisation and vanilla calibration. Our model sits in this family: a Hull--White level factor
+whose variance is a two-factor CIR mixture.
+
+\paragraph{Market models and SABR.} The alternative is to model the quoted forwards directly:
+the LIBOR market model~\cite{bgm1997}, its stochastic-volatility
+extensions~\cite{andersen2005,piterbarg2005}, and the SABR smile~\cite{hagan2002} combined with
+LMM dynamics~\cite{rebonato2009}. These fit a caplet smile slice by slice; a short-rate model
+instead fits the whole surface with one parameter vector and gives every discount factor at every
+date, which is what Monte Carlo pricing of path-dependent and in-arrears payoffs needs.
+
+\paragraph{Lifted and rough volatility.} Volatility is rough~\cite{gatheral2018}, and rough
+models admit affine Volterra representations~\cite{eleuch2019,abijaber2019volterra}. Their
+finite-dimensional Markovian lifts~\cite{abijaber2019multi,abijaber2019lifting,cuchiero2019}
+replace the fractional kernel by a weighted sum of mean-reverting factors; our two-factor CIR
+mixture is the lowest-order such lift, applied to a rate rather than an equity variance.
+
+\paragraph{Multi-curve modelling.} The separation of discounting from forward estimation was
+proposed by Henrard~\cite{henrard2007irony} and became standard after
+2008~\cite{bianchetti2010,mercurio2010,henrard2026,grbac2015}. Models in which the basis between
+the curves is itself stochastic include the Lévy-driven HJM model of Crépey, Grbac and
+Nguyen~\cite{crepey2012}, the affine LIBOR models of Grbac, Papapantoleon, Schoenmakers and
+Skovmand~\cite{grbac2015affine}, Mercurio and Xie's stochastic basis~\cite{mercurioxie2012}, and
+the term structure of interbank risk of Filipovi\'{c} and Trolle~\cite{filipovictrolle2013};
+Cuchiero, Fontana and Gnoatto~\cite{cfg2019} classify the affine specifications. Alfeus,
+Grasselli and Schl\"{o}gl~\cite{alfeus2020} and Backwell, Macrina, Schl\"{o}gl and
+Skovmand~\cite{backwell2025} explain the tenor basis by roll-over risk, the latter after the
+LIBOR transition. Our Hull--White basis factor \(k\) is the simplest member of this class: an
+additive, mean-reverting Gaussian spread.
+
+\paragraph{Caplets on backward-looking rates.} Since the LIBOR transition, USD and GBP caps pay a
+compounded overnight rate that is only known at the end of the accrual period. Henrard priced
+options on compounded deposits in Gaussian HJM~\cite{henrard2007rolled}. Lyashenko and
+Mercurio~\cite{lyashenko2019risk,lyashenko2019,lyashenko2019c} extended the market model to
+in-arrears rates (the generalised forward market model), and Henrard~\cite[Sec.~5.5 and
+7.12]{henrard2026} gives the effective-volatility treatment. Piterbarg~\cite{piterbarg2020} discusses
+the consequences for option markets, Turfus~\cite{turfus2022} gives closed-form Hull--White caplet
+prices, Willems~\cite{willems2020} derives effective SABR parameters, and Andersen and
+Bang~\cite{andersenbang2024} add jumps for SOFR caplets around policy meetings. The common point,
+which our instrument definition (Section~\ref{sec:instrument}) follows, is that a
+backward-looking caplet keeps volatility through its accrual period while a forward-looking one
+(EUR Euribor) does not.
+
+\paragraph{Calibration by simulation.} Calibrating directly through a Monte Carlo pricer, rather
+than through a closed-form or surrogate pricer~\cite{horvath2021}, is also the approach of
+Cuchiero, Khosrawi and Teichmann~\cite{cuchiero2020gan}, who differentiate through the
+simulation; we use a gradient-free SPSA estimator~\cite{spall1998} instead, because the
+implied-volatility inversion makes the objective non-smooth in the Monte Carlo noise.
+
 \section{The multi-curve model}
 
 \subsection{Why two curves}
@@ -80,10 +148,13 @@ two curves: a \textbf{discount} curve (€STR/OIS) for the collateralised payoff
 \textbf{projection} curve (6M Euribor) for the floating rate it pays on. In the EUR data the two
 differ by \(+9\) to \(+21\bp\) (the Euribor--OIS basis); collapsing them mis-prices every forward by
 that amount---an order of magnitude above our few-bp fit target. This is the multi-curve framework
-of Bianchetti~\cite{bianchetti2010}, Mercurio~\cite{mercurio2010} and others~\cite{henrard2014,grbac2015};
-our contribution is to embed it
-in an affine stochastic-volatility model so the \emph{smile}, not just the forward, is priced
-consistently across both curves.
+of Henrard~\cite{henrard2007irony,henrard2026}, Bianchetti~\cite{bianchetti2010},
+Mercurio~\cite{mercurio2010} and others~\cite{grbac2015}.
+Affine specifications of that framework are classified by Cuchiero, Fontana and
+Gnoatto~\cite{cfg2019}, and the state process below sits inside their affine multiple-yield-curve
+class; our contribution is to pair that structure with a lifted-CIR stochastic variance and to
+calibrate the result, so the \emph{smile}, not just the forward, is priced consistently across
+both curves.
 
 \subsection{State dynamics}
 Let \(f_{\text{ois}}(t)\) and \(f_{\text{proj}}(t)\) denote the OIS (discount) and 6M-Euribor
@@ -125,26 +196,73 @@ strike-flat; further flattening \(\theta\) and switching off \(k\) recovers the 
 one-factor Gaussian Hull--White models. This nesting (Section~\ref{sec:ladder}) provides an
 apples-to-apples decomposition of the fit.
 
+A note on the name: ``Heston--Hull--White'' is also used for the equity--rates hybrid in which a
+Heston stock is paired with Hull--White rates~\cite{grzelak2011}. Here there is no equity: the
+Heston-type variance drives the \emph{rate} factor itself.
+
+\subsection{A short rate on the projection curve}
+Henrard~\cite[Sec.~5.3]{henrard2026} warns that short-rate models do not carry over to forward
+curves: the projection curve's pseudo-discount factors are not prices of traded assets, are
+arbitrary before the first fixing~\cite[Sec.~3.6]{henrard2026}, and an asset would have to coincide
+with the collateral curve. Our construction avoids the objection in two ways. First, the only
+short rate that discounts is \(r_{\text{ois}}\), the collateral rate, which is the curve on which a
+short-rate model is legitimate. Second, \(r_{\text{proj}}=r_{\text{ois}}+(f_{\text{proj}}-f_{\text{ois}})+k\)
+is never used to discount; it enters only through the exponent of the projected rate over an
+accrual period, i.e.\ as a continuously compounded spread over the collateral curve. Henrard shows
+that this is the coherent way to represent a spread~\cite[Sec.~5.2.5]{henrard2026}, because it
+composes consistently across periods. \(\int r_{\text{proj}}\) is therefore a modelling device for
+the Euribor fixing, not a claim that a Euribor bond exists. In the RFR markets the question does not
+arise: the projection curve is the collateral curve, and \(k\) only adds noise around a zero basis.
+
 \section{Instrument and volatility inversion}
-The calibration instruments are per-period (backward-looking / RFR-style) caplets~\cite{lyashenko2019}. For a caplet
-fixing at \(t_{\text{fix}}\) with accrual \(\tau\) (EUR: \(\tau=0.5\)) and strike \(K\), the
-underlying is the average 6M~Euribor projection rate over the accrual window,
+\label{sec:instrument}
+A caplet with accrual period \([t_{\text{fix}},t_{\text{fix}}+\tau]\) and strike \(K\) pays
+\(\tau(R-K)^{+}\) at \(t_{\text{fix}}+\tau\), discounted on the collateral (OIS) curve. What
+\(R\) is depends on the market, and the distinction matters for the volatility
+(Section~\ref{sec:lit}).
+
+\paragraph{EUR: forward-looking term rate.} 6M Euribor is fixed at the start of the period, so
+\(R\) is known at \(t_{\text{fix}}\) and carries no volatility after it. In the model it is the
+simple rate implied by the expected projection integral over the coming period,
 \begin{equation}
-A = \frac{1}{\tau}\int_{t_{\text{fix}}}^{t_{\text{fix}}+\tau} r_{\text{proj}}(u)\,\mathrm{d}u ,
+R_{\text{term}} = \frac{1}{\tau}\Big(\exp\Big\{\mathbb{E}_{t_{\text{fix}}}\Big[\int_{t_{\text{fix}}}^{t_{\text{fix}}+\tau}
+r_{\text{proj}}(u)\,\mathrm{d}u\Big]\Big\}-1\Big).
 \end{equation}
-and the (OIS-discounted) payoff is \((A-K)^{+}\,\tau\). Monte Carlo estimators of the discount
-factor \(D=\mathbb{E}[e^{-\int_0^{t_{\text{fix}}+\tau} r_{\text{ois}}}]\), the forward
-\(F=\mathbb{E}[A\,e^{-\int r_{\text{ois}}}]/\mathbb{E}[e^{-\int r_{\text{ois}}}]\), and the price
-\(\mathrm{pv}=\mathbb{E}[(A-K)^{+}\tau\, e^{-\int r_{\text{ois}}}]\) are computed on the same path
-set. The model price is then inverted to a normal (Bachelier) implied volatility
+Because \(x\) and \(k\) have linear drifts, the conditional expectation is exact whatever the
+variance does after \(t_{\text{fix}}\):
+\(\mathbb{E}_{t_{\text{fix}}}[\int r_{\text{proj}}] = \int f_{\text{proj}} + x(t_{\text{fix}})B_\lambda(\tau) +
+k(t_{\text{fix}})B_\gamma(\tau)\), with \(B_a(\tau)=(1-e^{-a\tau})/a\) (in its exact
+discrete-time form on the simulation grid). The Monte Carlo therefore needs only the state at the
+fixing date.
+
+\paragraph{USD and GBP: backward-looking compounded RFR.} SOFR and SONIA caplets pay the
+overnight rate compounded through the accrual period~\cite{lyashenko2019,henrard2026}, which in
+continuous time is
 \begin{equation}
-\mathrm{pv} = D\,\tau\Big[(F-K)\,\Phi(d) + \sigma\sqrt{t_{\text{fix}}}\;\phi(d)\Big],
-\qquad d=\frac{F-K}{\sigma\sqrt{t_{\text{fix}}}},
+R_{\text{arr}} = \frac{1}{\tau}\Big(\exp\Big\{\int_{t_{\text{fix}}}^{t_{\text{fix}}+\tau}
+r_{\text{proj}}(u)\,\mathrm{d}u\Big\}-1\Big),
 \end{equation}
-by bisection on \(\sigma\). The \emph{partial-year} convention---variance accrues as
-\(\sigma^2\,t_{\text{fix}}\) with expiry \(t_{\text{fix}}\)---matches the convention under which the
-market caplet surface is stripped and quoted, so model and market volatilities are compared on a
-common footing.
+accrued over every business day of the period (Section~\ref{sec:calib}). In both markets the
+forward of \(R\) is the simple forward off the projection curve, which is the forward the market
+surface is stripped on.
+
+\paragraph{Pricing and inversion.} Monte Carlo estimators of the discount factor
+\(D=\mathbb{E}[e^{-\int_0^{t_{\text{fix}}+\tau} r_{\text{ois}}}]\), the forward
+\(F=\mathbb{E}[R\,e^{-\int r_{\text{ois}}}]/D\) and the price
+\(\mathrm{pv}=\mathbb{E}[(R-K)^{+}\tau\, e^{-\int r_{\text{ois}}}]\) are computed on the same path
+set, and the price is inverted to a normal (Bachelier) volatility by bisection on \(\sigma\):
+\begin{equation}
+\mathrm{pv} = D\,\tau\Big[(F-K)\,\Phi(d) + \sigma\sqrt{T_{\text{exp}}}\;\phi(d)\Big],
+\qquad d=\frac{F-K}{\sigma\sqrt{T_{\text{exp}}}} .
+\end{equation}
+For the EUR term caplet \(T_{\text{exp}}=t_{\text{fix}}\). For the in-arrears caplets the rate
+keeps setting until \(t_{\text{fix}}+\tau\); with volatility decaying linearly through the
+period the effective expiry is
+\(T_{\text{exp}}=t_{\text{fix}}+\tau/3\)~\cite{lyashenko2019,henrard2026}, and the first period
+\([0,\tau]\), which is not yet fixed at trade date, is a live caplet. Model and market are
+inverted with the same \(T_{\text{exp}}\), so they are compared on a common footing. That this
+matches the convention behind the vendor's flat RFR cap volatilities is an assumption we flag; the
+alternative (\(T_{\text{exp}}=t_{\text{fix}}+\tau\)) is a one-line change in the stripping.
 
 \section{Market data}
 Three market inputs are fed in, all sourced from Bloomberg:
@@ -152,13 +270,17 @@ Three market inputs are fed in, all sourced from Bloomberg:
   \item the OIS forward curve (\(360\) monthly points to \(30\)Y) for discounting;
   \item the 6M~Euribor projection forward curve (\(360\) monthly points) for the caplet underlying; and
   \item the caplet normal-volatility surface, stripped from the flat cap-vol quotes into
-  per-period Bachelier volatilities indexed by \((t_{\text{fix}},K)\).
+  per-period Bachelier volatilities indexed by \((t_{\text{fix}},K)\), with the expiry
+  convention of Section~\ref{sec:instrument}.
 \end{itemize}
+For USD and GBP the projection curve is the OIS (SOFR, SONIA) curve itself: the caplets reference
+the overnight rate, so the two curves coincide and only the EUR fit exercises the basis factor.
 The calibration set used here is the sub-surface with \(t_{\text{fix}}\le 10\)Y: \(20\) maturities
 (\(0.5,1.0,\dots,10.0\)Y) \(\times\) \(17\) strikes (\(-1.5\%\) to \(+10\%\)), i.e.\ \(340\)
 caplets, fitted \emph{jointly} with one parameter vector.
 
 \section{Calibration}
+\label{sec:calib}
 \paragraph{Simulation.} Paths are generated on a GPU with an \(O(N)\)-memory Monte Carlo (running
 integrals, never materialising the full path matrix for the pricing sums). The CIR variance
 factors are sampled with the Andersen (2008) quadratic-exponential (QE)
@@ -166,10 +288,22 @@ scheme~\cite{andersen2008,broadie2006}. In the low-vol
 regime the CIR is strongly Feller-violated (\(2\kappa\theta\ll\varepsilon^2\)); an Euler scheme
 with reflection biases the variance upward---most severely at short maturities, where it inflated
 the \(0.5\)Y ATM volatility from a market level of \(44\bp\) to over \(100\bp\)---whereas QE is
-moment-exact and places an honest point mass at zero in the exponential regime. The time step also
-matters: at \(dt=0.02\) (weekly) the EUR fit is \(9.4\bp\), whereas the coarser \(dt=0.03\)
-under-resolves the accrual-average integral and the variance path and inflates it to \(15.1\bp\)---%
-the discretisation, not the model, was the binding constraint.
+moment-exact and places an honest point mass at zero in the exponential regime.
+
+\paragraph{Time step and the accrual window.} The in-arrears payoff compounds the rate over the
+accrual period \([T,T+\tau]\), and in discrete time that integral is taken over
+\((i_{\text{pay}}-i_{\text{fix}})\) whole time steps; the term payoff uses the same window for its
+deterministic part and its factor loadings \(B_\lambda,B_\gamma\). The step is therefore not a free
+numerical parameter: unless \(\tau/dt\) is an integer, the simulated accrual period is not \(\tau\). At \(dt=0.03\) a \(6\)M window rounds to
+\(16\) or \(17\) steps depending on maturity---\(0.48\) or \(0.51\)Y against a contractual
+\(0.5\)---and a \(3\)M window to \(8\) or \(9\) steps, an error of up to \(+8\%\). At \(dt=0.02\)
+the \(6\)M tenor is exact (\(25\) steps) but the \(3\)M tenor is not (\(12.5\)), so the USD and GBP
+windows alternate by \(\pm4\%\) across maturities. We therefore simulate on the \emph{daily} grid
+\(dt=1/252\), for which \(\tau/dt\) is exactly \(126\) steps at \(6\)M and \(63\) at \(3\)M in every
+market: each business day in the accrual period is represented, as it is in an RFR contract. With
+the earlier in-arrears treatment of EUR this was the binding constraint: the EUR fit improved from
+\(15.1\bp\) at \(dt=0.03\) to \(8.6\bp\) at \(dt=1/252\), and moving USD from a misaligned step to the
+exact daily grid improved its ATM mean absolute error from \(5.2\) to \(3.6\bp\).
 
 \paragraph{Objective.} Parameters are estimated by minimising a \emph{vega-weighted} normal-vol
 RMSE. Each caplet is weighted by its Bachelier vega shape \(\phi(d)\) (with a \(20\%\) floor):
@@ -182,9 +316,13 @@ best is retained.
 
 \section{Results}
 \subsection{Goodness of fit}
-Table~\ref{tab:fit} summarises the fit of the proposed model. The overall RMSE is \(9.4\bp\), the
-ATM term structure is reproduced to \(2.9\bp\) mean absolute error, and the liquid core
-(\(|K-F|<2\%\)) is fitted to \(4.2\bp\). Figure~\ref{fig:surface3d} overlays the entire calibrated
+Table~\ref{tab:fit} summarises the fit of the proposed model. The overall RMSE is \(6.3\bp\), the
+ATM term structure is reproduced to \(2.4\bp\) mean absolute error, and the liquid core
+(\(|K-F|<2\%\), \(F\) the market forward) is fitted to \(3.7\bp\). Reported figures are means over
+three Monte-Carlo seeds at \(2\times10^5\) paths, with the seed standard deviation. The second column
+re-prices, with the same evaluation, the previous calibration in which the Euribor caplet was treated
+as an in-arrears average: ATM and core are unchanged to within \(0.1\bp\), and the whole gain comes
+from the smile away from the money, at every maturity from \(1\)Y (bottom rows). Figure~\ref{fig:surface3d} overlays the entire calibrated
 surface on the market mesh; Figure~\ref{fig:review} then breaks the fit down into the ATM term
 structure, representative smile slices, and the signed residual surface.
 
@@ -201,18 +339,23 @@ non-uniform strike ladder does not warp the mesh.}
 
 \begin{table}[t]
 \centering
-\begin{tabular}{lr}
+\begin{tabular}{lrr}
 \toprule
-Metric & Value \\
+Metric (bp) & term payoff (proposed) & in-arrears average (previous) \\
 \midrule
-Overall normal-vol RMSE & \(9.4\bp\) \\
-ATM mean absolute error & \(2.9\bp\) \\
-Liquid core RMSE (\(|K-F|<2\%\)) & \(4.2\bp\) \\
-Number of caplets & \(340\) \\
-Free parameters & \(27\) \\
+Overall normal-vol RMSE & \(6.29\pm0.03\) & \(8.57\pm0.18\) \\
+ATM mean absolute error & \(2.42\pm0.01\) & \(2.34\pm0.01\) \\
+Liquid core RMSE (\(|K-F|<2\%\)) & \(3.73\pm0.01\) & \(3.66\pm0.01\) \\
+\midrule
+RMSE, \(0.5\)--\(1\)Y & \(14.7\) & \(16.8\) \\
+RMSE, \(1\)--\(3\)Y & \(6.2\) & \(9.5\) \\
+RMSE, \(3\)--\(7\)Y & \(4.2\) & \(7.2\) \\
+RMSE, \(7\)--\(10\)Y & \(3.2\) & \(4.9\) \\
 \bottomrule
 \end{tabular}
-\caption{Fit of the calibrated 2F lifted-CIR HWH model (QE simulation, vega-weighted objective).}
+\caption{Fit of the calibrated 2F lifted-CIR HWH model on the EUR surface (\(340\) caplets, \(27\)
+parameters, daily step \(dt=1/252\), QE simulation, vega-weighted objective). Means \(\pm\) standard
+deviation over three seeds at \(2\times10^5\) paths; both columns evaluated by the same procedure.}
 \label{tab:fit}
 \end{table}
 
@@ -221,7 +364,11 @@ Free parameters & \(27\) \\
 Table~\ref{tab:ladder} decomposes the fit across the nested restrictions on identical data. The
 Gaussian restrictions (flat smile) and the deterministic-vol term structure all sit near
 \(45\)--\(47\bp\); introducing the two-factor stochastic variance (HWH) reduces the RMSE to
-\(9.4\bp\). Stochastic volatility, not additional Gaussian factors, is what fits the surface.
+\(9.4\bp\). Stochastic volatility, not additional Gaussian factors, is what fits the surface. The
+ladder is a comparison \emph{between model classes}, so all four rungs are run at a common
+\(dt=0.02\)---exact for the \(6\)M EUR accrual window---and with the earlier in-arrears payoff, rather
+than with the daily step and term payoff of the headline fit; the relative ordering is what the table
+establishes.
 
 \begin{table}[t]
 \centering
@@ -239,7 +386,9 @@ Hull--White + deterministic vol& term-structure  & 0 & 45.3 \\
 and deterministic-vol rungs have \(\varepsilon=0\), so their variance is deterministic and the
 simulation scheme is immaterial; they define the strike-flat baseline (\(\approx 45\bp\)). Only the
 stochastic-volatility model reduces the RMSE below it. The SV model is additionally vega-weighted to
-tighten the liquid core (Section~6).}
+tighten the liquid core (Section~\ref{sec:calib}). All rungs share \(dt=0.02\) and the earlier
+in-arrears payoff; the headline daily-step, term-payoff fit of the HWH model is \(6.3\bp\)
+(Table~\ref{tab:fit}).}
 \label{tab:ladder}
 \end{table}
 
@@ -251,14 +400,17 @@ basis-factor reversions \(\lambda,\gamma\), the basis vol \(\xi\), and the initi
 \(V_0\). Tables~\ref{tab:theta} and \ref{tab:scalar} report the full calibrated set. The
 \(\theta_i(t)\) and \(\rho(t)\) nodes are interpolated by monotone PCHIP splines; \(\theta\) is
 reported as \(\sqrt{\theta}\times10^4\) (the instantaneous vol scale in bp, before mean reversion
-and accrual averaging pull the caplet implied vol below it).
+pulls the caplet implied vol below it).
 
-The estimates are economically sensible: a fast/slow variance pair (\(\kappa_f=1.51\),
-\(\kappa_s=0.10\)) mixed with weight \(w=0.70\); a moderate vol-of-vol \(\varepsilon=0.11\); a
-slowly mean-reverting level factor (\(\lambda=0.19\)); and a \emph{positive} leverage \(\rho\)
-decreasing from \(0.44\) (1Y) to \(0.29\) (10Y), consistent with the right-skewed (payer) cap smile.
-The Hull--White basis volatility is small (\(\xi=9.5\times10^{-4}\)), so the Euribor--OIS basis is
-close to deterministic---it follows its market forward with only a small mean-reverting fluctuation.
+The estimates are economically sensible: a fast/slow variance pair (\(\kappa_f=1.50\),
+\(\kappa_s=0.095\)) mixed with weight \(w=0.81\); a moderate vol-of-vol \(\varepsilon=0.10\); a
+slowly mean-reverting level factor (\(\lambda=0.18\)); and a \emph{positive} leverage \(\rho\),
+\(0.46\) at 1Y and \(0.58\) at 5Y before falling to \(0.14\) at 10Y, consistent with the right-skewed
+(payer) cap smile. The Hull--White basis volatility is small (\(\xi=1.2\times10^{-3}\)), so the
+Euribor--OIS basis is close to deterministic---it follows its market forward with only a small
+mean-reverting fluctuation. The fast reversion \(\kappa_f\) sits at the lower bound of its search
+range (\(1.5\)), as it did in the earlier fits; the optimiser would take a slower fast factor if
+allowed, which we leave as a robustness check.
 
 \begin{table}[t]
 \centering
@@ -266,8 +418,8 @@ close to deterministic---it follows its market forward with only a small mean-re
 \toprule
 node (yr) & 0.25 & 0.5 & 1 & 2 & 3 & 5 & 7 & 10 \\
 \midrule
-\(\sqrt{\theta_1}\) (bp) & 85.7 & 140.4 & 152.6 & 169.3 & 179.8 & 158.3 & 212.0 & 116.6 \\
-\(\sqrt{\theta_2}\) (bp) & 106.1 & 157.2 & 107.9 & 112.5 & 110.6 & 135.2 & 64.4 & 100.6 \\
+\(\sqrt{\theta_1}\) (bp) & 99.5 & 147.4 & 159.7 & 174.7 & 146.6 & 190.2 & 173.1 & 199.1 \\
+\(\sqrt{\theta_2}\) (bp) & 20.1 & 161.6 & 111.6 & 173.9 & 153.3 & 112.8 & 109.1 & 153.5 \\
 \bottomrule
 \end{tabular}
 \caption{Calibrated long-run variance term structures (fast factor \(\theta_1\), slow factor
@@ -282,11 +434,11 @@ node (yr) & 0.25 & 0.5 & 1 & 2 & 3 & 5 & 7 & 10 \\
 \(\kappa_f\) & \(\kappa_s\) & \(w\) & \(\varepsilon\) & \(\lambda\) & \(\gamma\) & \(\xi\) &
 \(V_0\) & \\
 \midrule
-1.51 & 0.10 & 0.70 & 0.11 & 0.19 & 0.43 & \(9.5\!\times\!10^{-4}\) & 0 & \\
+1.50 & 0.095 & 0.81 & 0.10 & 0.18 & 0.24 & \(1.2\!\times\!10^{-3}\) & 0 & \\
 \midrule
 \multicolumn{2}{l}{leverage} & \(\rho(1\text{Y})\) & \(\rho(5\text{Y})\) & \(\rho(10\text{Y})\) &
 \multicolumn{4}{l}{} \\
-& & 0.443 & 0.365 & 0.286 & \multicolumn{4}{l}{} \\
+& & 0.461 & 0.576 & 0.140 & \multicolumn{4}{l}{} \\
 \bottomrule
 \end{tabular}
 \caption{Calibrated scalar parameters (top) and the \(3\)-node leverage term structure (bottom).}
@@ -298,8 +450,9 @@ node (yr) & 0.25 & 0.5 & 1 & 2 & 3 & 5 & 7 & 10 \\
 \includegraphics[width=\textwidth]{fig_eur_review.png}
 \caption{EUR calibration, market (black) vs.\ model (red). Top-left: ATM term structure; remaining
 panels: smile slices at 1/2/5/10Y and the signed residual surface (\(\text{model}-\text{market}\),
-bp). The residual is near-zero across the liquid body; the only material band is the short-dated
-deep-ITM wing, where the near-intrinsic quotes carry negligible vega.}
+bp). The residual is small across the body of the surface from \(1\)Y; the material bands are the
+\(0.5\)--\(1\)Y expiries, whose ATM level the model undershoots (Section~\ref{sec:discussion}), and
+their deep-ITM wing, where the near-intrinsic quotes carry negligible vega.}
 \label{fig:review}
 \end{figure}
 
@@ -308,62 +461,91 @@ deep-ITM wing, where the near-intrinsic quotes carry negligible vega.}
 \includegraphics[width=\textwidth]{fig_eur_ladder.png}
 \caption{Nested-model ladder: RMSE bars (left), ATM term structure (centre), and the \(5\)Y smile
 (right). The Gaussian/deterministic-vol rungs are strike-flat; only the stochastic-volatility model
-follows the market smile.}
+follows the market smile. All rungs at \(dt=0.02\) with the earlier in-arrears payoff, as in
+Table~\ref{tab:ladder}.}
 \label{fig:ladder}
 \end{figure}
 
 
 \subsection{Cross-market robustness}
 To check that the fit is not an EUR artefact, the identical pipeline (QE simulation, vega-weighted
-objective, \(27\) parameters, \(500\) SPSA iterations) was applied to the USD and GBP caplet
-surfaces. USD and GBP are RFR markets (3M SOFR, 3M SONIA), for which the average-over-accrual payoff
-is convention-exact; EUR is the IBOR (6M Euribor) case. Table~\ref{tab:cross} reports the fit for
+objective, \(27\) parameters, \(800\) SPSA iterations, \(dt=1/252\)) was applied to the USD and GBP caplet
+surfaces. USD and GBP are RFR markets (3M SOFR, 3M SONIA), priced as compounded in-arrears caplets;
+EUR is the forward-looking IBOR (6M Euribor) case (Section~\ref{sec:instrument}). Table~\ref{tab:cross} reports the fit for
 all three, with a single parameter set per market, despite the different underlyings, curve
-conventions and surface sizes (USD/GBP carry \(680\) caplets on the 3M grid vs \(340\) for EUR). The
-Monte-Carlo time step matters: at \(dt=0.02\) the EUR liquid-core RMSE falls to \(4.2\bp\) (overall
-\(9.4\bp\)); USD and GBP, reported here at the coarser \(dt=0.03\), are being re-run at the finer
-step and are expected to see a comparable reduction. That the fit is uniform across markets is
-evidence that the model, not a market-specific tuning, is doing the work.
+conventions and surface sizes (USD/GBP carry \(697\) caplets on the 3M grid, including the first
+period, vs \(340\) for EUR). The RFR headline is computed from \(t_{\text{fix}}\ge0.5\)Y: the first
+caplet (\(t_{\text{fix}}=0\), effective expiry \(\tau/3\approx1\)M) has near-intrinsic wings whose
+inverted volatilities are numerically meaningless, and we report it separately rather than let it
+dominate the average. From \(1\)Y the three markets are fitted to similar accuracy (\(3\)--\(7\bp\) by
+maturity bucket); the RFR short end is weaker (Section~\ref{sec:discussion}). On the GBP surface, which
+is the one whose curves are unchanged, the same evaluation of the earlier calibration gives \(9.6\bp\)
+from \(6\)M, against \(7.8\bp\) now.
 Figure~\ref{fig:cross} shows the market-vs-model ATM term structure and \(5\)Y smile for each.
 
 \begin{table}[t]
 \centering
-\begin{tabular}{llrcrrr}
+\begin{tabular}{llrrrrr}
 \toprule
-market & underlying & caplets & \(dt\) & RMSE (bp) & ATM MAE (bp) & liquid RMSE (bp) \\
+market & payoff & caplets & RMSE & ATM MAE & liquid RMSE & full-surface RMSE \\
 \midrule
-EUR & 6M Euribor (IBOR) & 340 & 0.02 & 9.4 & 2.9 & 4.2 \\
-USD & 3M SOFR (RFR)     & 680 & 0.03 & 14.2 & 5.6 & 8.0 \\
-GBP & 3M SONIA (RFR)    & 680 & 0.03 & 16.8 & 5.2 & 7.8 \\
+EUR & 6M Euribor, term     & 340 & \(6.29\) & \(2.42\) & \(3.73\) & \(6.29\) \\
+USD & 3M SOFR, in-arrears  & 697 & \(7.61\) & \(2.73\) & \(3.79\) & \(16.96\) \\
+GBP & 3M SONIA, in-arrears & 697 & \(7.77\) & \(4.68\) & \(4.81\) & \(19.30\) \\
 \bottomrule
 \end{tabular}
-\caption{Cross-market robustness: the same model and calibration on three caplet surfaces. EUR is
-shown at the finer Monte-Carlo time step \(dt=0.02\); USD and GBP at \(dt=0.03\), with the
-finer-step re-run in progress (EUR improved from \(15.1\) to \(9.4\bp\) at \(dt=0.02\)).}
+\caption{Cross-market robustness: the same model and calibration on three caplet surfaces, all on
+the daily grid \(dt=1/252\) at \(800\) SPSA iterations. All figures in bp; the first three error
+columns are over \(t_{\text{fix}}\ge0.5\)Y (the whole EUR surface), the last over the full surface
+including the first RFR caplet, whose own RMSE is \(69\) (USD) and \(80\bp\) (GBP). Means over three
+seeds at \(2\times10^5\) paths; the seed standard deviation of the headline RMSE is \(0.03\) (EUR),
+\(0.05\) (USD) and \(0.85\bp\) (GBP), and is below \(0.1\bp\) on the ATM and liquid-core columns.}
 \label{tab:cross}
 \end{table}
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\textwidth]{fig_cross_market.png}
-\caption{Cross-market HWH calibration (QE, vega-weighted): ATM term structure (top row) and \(5\)Y
-smile (bottom row) for EUR, USD and GBP; market (black) vs.\ model (red).}
+\caption{Cross-market HWH calibration (QE, vega-weighted, daily grid \(dt=1/252\)): ATM term
+structure (top row) and \(5\)Y smile (bottom row) for EUR, USD and GBP; market (black) vs.\ model
+(red). The market term structures are piecewise flat because the stripped caplet volatility is
+constant between quoted cap maturities.}
 \label{fig:cross}
 \end{figure}
 
 \section{Discussion and further work}
-The model reproduces the EUR caplet surface to first order across the whole strike/maturity range
-with a single parameter set. Three residuals remain and are reported honestly. First, the
-short-dated deep-ITM wing is over-priced by the model; these strikes are near-intrinsic and carry
-almost no vega, so their inverted volatilities are numerically ill-conditioned and are
-intentionally down-weighted. Second, the \(1\)Y and \(10\)Y ATM points remain \(\approx 10\bp\)
-soft; a long-end \(\theta\) node or maturity re-weighting is the natural lever. Third, the extreme
-short-maturity/high-strike corner is the steepest feature of the surface and the hardest for a pure
-diffusion to reach.
+\label{sec:discussion}
+The model reproduces the EUR caplet surface across the whole strike/maturity range with a single
+parameter set, and the RFR surfaces from \(6\)M out. Getting the instrument right mattered as much
+as the model: treating Euribor as the forward-looking term rate it is, rather than as an in-arrears
+average, removed a quarter of the EUR error. The remaining residuals are these.
 
-Planned extensions: (i) calibrate the full surface to \(29.5\)Y (the stripped surface already
-carries these quotes); and (ii) an out-of-sample check by repricing ATM swaptions---which do not
-enter the calibration---with the calibrated parameters. Because a swaption probes the
+\emph{The short end.} Below \(1\)Y the model undershoots the ATM level: in EUR \(36\) against
+\(44\bp\) at \(0.5\)Y and \(58\) against \(72\bp\) at \(1\)Y, and in GBP \(38\) against \(52\bp\) at
+\(0.5\)Y. Part of this is in the data---the EUR \(1\)Y point sits above the \(1.5\)Y point, and the
+stripped surface is piecewise flat between cap maturities---but a diffusion with mean-reverting
+variance also struggles to build a short-dated hump. Jumps around policy dates~\cite{andersenbang2024}
+are the natural extension, as is a joint check of the RFR expiry convention
+(Section~\ref{sec:instrument}), on which the short-end RFR volatilities depend most.
+
+\emph{Near-intrinsic wings.} The short-dated deep-ITM and far-OTM strikes carry almost no vega; their
+inverted volatilities are ill-conditioned, are down-weighted by design, and dominate the
+full-surface RMSE of the RFR markets through the first caplet.
+
+\emph{The initial curve.} The factors are added to the market forward curves without a convexity
+correction, so the model forward drifts below the market forward with maturity: by \(9\)--\(11\bp\)
+at \(5\)Y and \(22\)--\(37\bp\) at \(10\)Y across the three markets. Strikes are therefore read at a
+slightly displaced forward at the long end. A deterministic shift fitted to the initial discount
+curves under the calibrated dynamics, in the spirit of the CIR++ extension~\cite{brigo2006}, removes
+this exactly and is the first item of further work.
+
+\emph{Parameter bounds.} \(\kappa_f\) calibrates to the lower bound of its range, so that bound
+should be relaxed and the fit repeated.
+
+Planned extensions: (i) the deterministic-shift curve fit above; (ii) re-running the nested ladder
+with the term payoff and daily step; (iii) calibrating the full surface to \(29.5\)Y (the stripped
+surface already carries these quotes); and (iv) an out-of-sample check by repricing ATM
+swaptions---which do not enter the calibration---with the calibrated parameters. Because a swaption probes the
 \emph{correlation} between forward rates that a caplet surface only partly constrains, this is the
 most informative remaining test; it requires bond reconstruction at the option expiry under
 stochastic volatility (a conditional-Gaussian or nested-MC pricer), and is left as the natural next
@@ -400,71 +582,178 @@ in the quadratic branch, approximate in the exponential).
 
 \clearpage
 \begin{thebibliography}{99}
+\small
+% --- lifted / rough volatility
 \bibitem{abijaber2019multi} E.~Abi~Jaber and O.~El~Euch.
   Multifactor approximation of rough volatility models.
-  \emph{SIAM Journal on Financial Mathematics}, 10(2):309--349, 2019.
+  \emph{SIAM Journal on Financial Mathematics}, 10(2):309--349, 2019. \doi{10.1137/18M1170236}
 \bibitem{abijaber2019lifting} E.~Abi~Jaber.
   Lifting the Heston model.
-  \emph{Quantitative Finance}, 19(12):1995--2013, 2019.
+  \emph{Quantitative Finance}, 19(12):1995--2013, 2019. \doi{10.1080/14697688.2019.1615113}
+\bibitem{abijaber2019volterra} E.~Abi~Jaber, M.~Larsson, and S.~Pulido.
+  Affine Volterra processes.
+  \emph{Annals of Applied Probability}, 29(5):3155--3200, 2019. \doi{10.1214/19-AAP1477}
 \bibitem{cuchiero2019} C.~Cuchiero and J.~Teichmann.
   Markovian lifts of positive semidefinite affine Volterra-type processes.
-  \emph{Decisions in Economics and Finance}, 42:407--448, 2019.
-\bibitem{andersen2008} L.~B.~G.~Andersen.
-  Simple and efficient simulation of the Heston stochastic volatility model.
-  \emph{Journal of Computational Finance}, 11(3):1--42, 2008.
+  \emph{Decisions in Economics and Finance}, 42(2):407--448, 2019. \doi{10.1007/s10203-019-00268-5}
+\bibitem{gatheral2018} J.~Gatheral, T.~Jaisson, and M.~Rosenbaum.
+  Volatility is rough.
+  \emph{Quantitative Finance}, 18(6):933--949, 2018. \doi{10.1080/14697688.2017.1393551}
+\bibitem{eleuch2019} O.~El~Euch and M.~Rosenbaum.
+  The characteristic function of rough Heston models.
+  \emph{Mathematical Finance}, 29(1):3--38, 2019. \doi{10.1111/mafi.12173}
+% --- short-rate, affine and HJM foundations
+\bibitem{vasicek1977} O.~Vasicek.
+  An equilibrium characterization of the term structure.
+  \emph{Journal of Financial Economics}, 5(2):177--188, 1977. \doi{10.1016/0304-405X(77)90016-2}
+\bibitem{cir1985} J.~C.~Cox, J.~E.~Ingersoll, and S.~A.~Ross.
+  A theory of the term structure of interest rates.
+  \emph{Econometrica}, 53(2):385--407, 1985. \doi{10.2307/1911242}
+\bibitem{hullwhite1990} J.~Hull and A.~White.
+  Pricing interest-rate-derivative securities.
+  \emph{Review of Financial Studies}, 3(4):573--592, 1990. \doi{10.1093/rfs/3.4.573}
+\bibitem{hjm1992} D.~Heath, R.~Jarrow, and A.~Morton.
+  Bond pricing and the term structure of interest rates: a new methodology for contingent claims valuation.
+  \emph{Econometrica}, 60(1):77--105, 1992. \doi{10.2307/2951677}
+\bibitem{heston1993} S.~L.~Heston.
+  A closed-form solution for options with stochastic volatility with applications to bond and currency options.
+  \emph{Review of Financial Studies}, 6(2):327--343, 1993. \doi{10.1093/rfs/6.2.327}
+\bibitem{duffie2000} D.~Duffie, J.~Pan, and K.~Singleton.
+  Transform analysis and asset pricing for affine jump-diffusions.
+  \emph{Econometrica}, 68(6):1343--1376, 2000. \doi{10.1111/1468-0262.00164}
+\bibitem{brigo2006} D.~Brigo and F.~Mercurio.
+  \emph{Interest Rate Models---Theory and Practice: With Smile, Inflation and Credit}, 2nd edition.
+  Springer Finance, Springer, 2006. \doi{10.1007/978-3-540-34604-3}
+\bibitem{filipovic2009} D.~Filipovi\'{c}.
+  \emph{Term-Structure Models: A Graduate Course}. Springer Finance, Springer, 2009.
+  \doi{10.1007/978-3-540-68015-4}
+% --- stochastic volatility in rates
+\bibitem{fongvasicek1991} H.~G.~Fong and O.~A.~Vasicek.
+  Fixed-income volatility management.
+  \emph{Journal of Portfolio Management}, 17(4):41--46, 1991. \doi{10.3905/jpm.1991.409345}
+\bibitem{longstaffschwartz1992} F.~A.~Longstaff and E.~S.~Schwartz.
+  Interest rate volatility and the term structure: a two-factor general equilibrium model.
+  \emph{Journal of Finance}, 47(4):1259--1282, 1992. \doi{10.1111/j.1540-6261.1992.tb04657.x}
+\bibitem{cheyette1992} O.~Cheyette.
+  Markov representation of the Heath--Jarrow--Morton model.
+  Working paper, BARRA, 1992. \doi{10.2139/ssrn.6073}
+\bibitem{ritchken1995} P.~Ritchken and L.~Sankarasubramanian.
+  Volatility structures of forward rates and the dynamics of the term structure.
+  \emph{Mathematical Finance}, 5(1):55--72, 1995. \doi{10.1111/j.1467-9965.1995.tb00101.x}
+\bibitem{collindufresne2002} P.~Collin-Dufresne and R.~S.~Goldstein.
+  Do bonds span the fixed income markets? Theory and evidence for unspanned stochastic volatility.
+  \emph{Journal of Finance}, 57(4):1685--1730, 2002. \doi{10.1111/1540-6261.00475}
+\bibitem{trolleschwartz2009} A.~B.~Trolle and E.~S.~Schwartz.
+  A general stochastic volatility model for the pricing of interest rate derivatives.
+  \emph{Review of Financial Studies}, 22(5):2007--2057, 2009. \doi{10.1093/rfs/hhn040}
+\bibitem{andersenpiterbarg2010} L.~B.~G.~Andersen and V.~V.~Piterbarg.
+  \emph{Interest Rate Modeling}, Volumes I--III. Atlantic Financial Press, 2010.
+\bibitem{grzelak2011} L.~A.~Grzelak and C.~W.~Oosterlee.
+  On the Heston model with stochastic interest rates.
+  \emph{SIAM Journal on Financial Mathematics}, 2(1):255--286, 2011. \doi{10.1137/090756119}
+% --- market models and smile
+\bibitem{bgm1997} A.~Brace, D.~Gatarek, and M.~Musiela.
+  The market model of interest rate dynamics.
+  \emph{Mathematical Finance}, 7(2):127--155, 1997. \doi{10.1111/1467-9965.00028}
+\bibitem{hagan2002} P.~S.~Hagan, D.~Kumar, A.~S.~Lesniewski, and D.~E.~Woodward.
+  Managing smile risk.
+  \emph{Wilmott Magazine}, September 2002, 84--108.
+\bibitem{andersen2005} L.~Andersen and R.~Brotherton-Ratcliffe.
+  Extended LIBOR market models with stochastic volatility.
+  \emph{Journal of Computational Finance}, 9(1):1--40, 2005. \doi{10.21314/JCF.2005.127}
+\bibitem{piterbarg2005} V.~V.~Piterbarg.
+  Stochastic volatility model with time-dependent skew.
+  \emph{Applied Mathematical Finance}, 12(2):147--185, 2005. \doi{10.1080/1350486042000297225}
+\bibitem{rebonato2009} R.~Rebonato, K.~McKay, and R.~White.
+  \emph{The SABR/LIBOR Market Model: Pricing, Calibration and Hedging for Complex Interest-Rate
+  Derivatives}. Wiley, 2009.
+% --- multi-curve
+\bibitem{henrard2007irony} M.~Henrard.
+  The irony in the derivatives discounting.
+  \emph{Wilmott Magazine}, 30:92--98, 2007.
 \bibitem{bianchetti2010} M.~Bianchetti.
   Two curves, one price.
-  \emph{Risk}, 23(8):66--72, 2010.
+  \emph{Risk}, 23(8):74--80, 2010. Full version: \doi{10.2139/ssrn.1334356}
 \bibitem{mercurio2010} F.~Mercurio.
   Interest rates and the credit crunch: new formulas and market models.
   Bloomberg Portfolio Research Paper No.\ 2010-01-FRONTIERS, 2010.
+  \url{https://ssrn.com/abstract=1332205}
+\bibitem{crepey2012} S.~Cr\'{e}pey, Z.~Grbac, and H.-N.~Nguyen.
+  A multiple-curve HJM model of interbank risk.
+  \emph{Mathematics and Financial Economics}, 6(3):155--190, 2012. \doi{10.1007/s11579-012-0083-4}
+\bibitem{mercurioxie2012} F.~Mercurio and Z.~Xie.
+  The basis goes stochastic.
+  \emph{Risk}, 25(12):78--83, 2012.
+\bibitem{filipovictrolle2013} D.~Filipovi\'{c} and A.~B.~Trolle.
+  The term structure of interbank risk.
+  \emph{Journal of Financial Economics}, 109(3):707--733, 2013.
+\bibitem{grbac2015} Z.~Grbac and W.~J.~Runggaldier.
+  \emph{Interest Rate Modeling: Post-Crisis Challenges and Approaches}.
+  SpringerBriefs in Quantitative Finance, Springer, 2015. \doi{10.1007/978-3-319-25385-5}
+\bibitem{grbac2015affine} Z.~Grbac, A.~Papapantoleon, J.~Schoenmakers, and D.~Skovmand.
+  Affine LIBOR models with multiple curves: theory, examples and calibration.
+  \emph{SIAM Journal on Financial Mathematics}, 6(1):984--1025, 2015. \doi{10.1137/15M1011731}
+\bibitem{cfg2019} C.~Cuchiero, C.~Fontana, and A.~Gnoatto.
+  Affine multiple yield curve models.
+  \emph{Mathematical Finance}, 29(2):568--611, 2019. \doi{10.1111/mafi.12183}
+\bibitem{alfeus2020} M.~Alfeus, M.~Grasselli, and E.~Schl\"{o}gl.
+  A consistent stochastic model of the term structure of interest rates for multiple tenors.
+  \emph{Journal of Economic Dynamics and Control}, 114:103861, 2020. \doi{10.1016/j.jedc.2020.103861}
+\bibitem{backwell2025} A.~Backwell, A.~Macrina, E.~Schl\"{o}gl, and D.~Skovmand.
+  Lost in the LIBOR transition.
+  \emph{Quantitative Finance}, 25(1):17--30, 2025. \doi{10.1080/14697688.2024.2436651}
+\bibitem{henrard2026} M.~Henrard.
+  \emph{Interest Rate Modelling in the Multi-Curve Framework: Foundations, Evolution, Transition,
+  and Implementation}, 2nd edition. Applied Quantitative Finance, Palgrave Macmillan, 2026.
+  \doi{10.1007/978-3-032-02685-9}
+% --- backward-looking / in-arrears caplets
+\bibitem{henrard2007rolled} M.~Henrard.
+  Skewed Libor market model and Gaussian HJM explicit approaches to rolled deposit options.
+  \emph{Journal of Risk}, 9(4):95--116, 2007. \doi{10.21314/JOR.2007.152}
+\bibitem{lyashenko2019risk} A.~Lyashenko and F.~Mercurio.
+  Libor replacement: a modelling framework for in-arrears term rates.
+  \emph{Risk}, June 2019.
+  \url{https://www.risk.net/cutting-edge/banking/6732471/libor-replacement-a-modelling-framework-for-in-arrears-term-rates}
+\bibitem{lyashenko2019} A.~Lyashenko and F.~Mercurio.
+  Looking forward to backward-looking rates: a modeling framework for term rates replacing LIBOR.
+  SSRN Working Paper 3330240, 2019. \doi{10.2139/ssrn.3330240}
+\bibitem{lyashenko2019c} A.~Lyashenko and F.~Mercurio.
+  Looking forward to backward-looking rates: completing the generalized forward market model.
+  SSRN Working Paper 3482132, 2019. \url{https://ssrn.com/abstract=3482132}
+\bibitem{piterbarg2020} V.~Piterbarg.
+  Interest rates benchmark reform and options markets.
+  SSRN Working Paper 3537925, 2020. \doi{10.2139/ssrn.3537925}
+\bibitem{willems2020} S.~Willems.
+  SABR smiles for RFR caplets.
+  SSRN Working Paper 3567655, 2020. \doi{10.2139/ssrn.3567655}
+\bibitem{turfus2022} C.~Turfus.
+  Caplet pricing with backward-looking rates.
+  \emph{Wilmott}, 2022(121), 2022. \doi{10.54946/wilm.11057}
+\bibitem{andersenbang2024} L.~Andersen and D.~Bang.
+  Spike and hike modeling for interest rate derivatives: with an application to SOFR caplets.
+  \emph{Quantitative Finance}, 24(8):1017--1033, 2024. \doi{10.1080/14697688.2024.2364800}
+% --- simulation and calibration
+\bibitem{broadie2006} M.~Broadie and \"{O}.~Kaya.
+  Exact simulation of stochastic volatility and other affine jump diffusion processes.
+  \emph{Operations Research}, 54(2):217--231, 2006. \doi{10.1287/opre.1050.0247}
+\bibitem{andersen2008} L.~B.~G.~Andersen.
+  Simple and efficient simulation of the Heston stochastic volatility model.
+  \emph{Journal of Computational Finance}, 11(3):1--42, 2008. \doi{10.21314/JCF.2008.189}
 \bibitem{spall1998} J.~C.~Spall.
   Implementation of the simultaneous perturbation algorithm for stochastic optimization.
   \emph{IEEE Transactions on Aerospace and Electronic Systems}, 34(3):817--823, 1998.
+  \doi{10.1109/7.705889}
 \bibitem{kingma2015} D.~P.~Kingma and J.~Ba.
   Adam: a method for stochastic optimization.
   \emph{International Conference on Learning Representations (ICLR)}, 2015.
-\bibitem{vasicek1977} O.~Vasicek.
-  An equilibrium characterization of the term structure.
-  \emph{Journal of Financial Economics}, 5(2):177--188, 1977.
-\bibitem{cir1985} J.~C.~Cox, J.~E.~Ingersoll, and S.~A.~Ross.
-  A theory of the term structure of interest rates.
-  \emph{Econometrica}, 53(2):385--407, 1985.
-\bibitem{hullwhite1990} J.~Hull and A.~White.
-  Pricing interest-rate-derivative securities.
-  \emph{Review of Financial Studies}, 3(4):573--592, 1990.
-\bibitem{heston1993} S.~L.~Heston.
-  A closed-form solution for options with stochastic volatility with applications to bond and currency options.
-  \emph{Review of Financial Studies}, 6(2):327--343, 1993.
-\bibitem{duffie2000} D.~Duffie, J.~Pan, and K.~Singleton.
-  Transform analysis and asset pricing for affine jump-diffusions.
-  \emph{Econometrica}, 68(6):1343--1376, 2000.
-\bibitem{brigo2006} D.~Brigo and F.~Mercurio.
-  \emph{Interest Rate Models---Theory and Practice}, 2nd edition. Springer, 2006.
-\bibitem{hagan2002} P.~S.~Hagan, D.~Kumar, A.~S.~Lesniewski, and D.~E.~Woodward.
-  Managing smile risk.
-  \emph{Wilmott Magazine}, 1:84--108, 2002.
-\bibitem{gatheral2018} J.~Gatheral, T.~Jaisson, and M.~Rosenbaum.
-  Volatility is rough.
-  \emph{Quantitative Finance}, 18(6):933--949, 2018.
-\bibitem{eleuch2019} O.~El~Euch and M.~Rosenbaum.
-  The characteristic function of rough Heston models.
-  \emph{Mathematical Finance}, 29(1):3--38, 2019.
-\bibitem{abijaber2019volterra} E.~Abi~Jaber, M.~Larsson, and S.~Pulido.
-  Affine Volterra processes.
-  \emph{Annals of Applied Probability}, 29(5):3155--3200, 2019.
-\bibitem{henrard2014} M.~Henrard.
-  \emph{Interest Rate Modelling in the Multi-curve Framework}. Palgrave Macmillan, 2014.
-\bibitem{grbac2015} Z.~Grbac and W.~J.~Runggaldier.
-  \emph{Interest Rate Modeling: Post-Crisis Challenges and Approaches}. Springer, 2015.
-\bibitem{lyashenko2019} A.~Lyashenko and F.~Mercurio.
-  Looking forward to backward-looking rates: a modeling framework for term rates replacing LIBOR.
-  \emph{Risk}, 2019.
-\bibitem{broadie2006} M.~Broadie and \"{O}.~Kaya.
-  Exact simulation of stochastic volatility and other affine jump diffusion processes.
-  \emph{Operations Research}, 54(2):217--231, 2006.
-\bibitem{filipovic2009} D.~Filipovi\'{c}.
-  \emph{Term-Structure Models: A Graduate Course}. Springer, 2009.
+  \doi{10.48550/arXiv.1412.6980}
+\bibitem{cuchiero2020gan} C.~Cuchiero, W.~Khosrawi, and J.~Teichmann.
+  A generative adversarial network approach to calibration of local stochastic volatility models.
+  \emph{Risks}, 8(4):101, 2020. \doi{10.3390/risks8040101}
+\bibitem{horvath2021} B.~Horvath, A.~Muguruza, and M.~Tomas.
+  Deep learning volatility: a deep neural network perspective on pricing and calibration in
+  (rough) volatility models.
+  \emph{Quantitative Finance}, 21(1):11--27, 2021. \doi{10.1080/14697688.2020.1817974}
 \end{thebibliography}
 
 \end{document}

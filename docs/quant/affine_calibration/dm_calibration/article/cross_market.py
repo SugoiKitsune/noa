@@ -7,7 +7,11 @@ and writes:
     the 5Y smile, market vs model, for each market.
 Only markets whose results exist are included.
 
-Run:  <python> cross_market.py
+Run:  <python> cross_market.py --tag qe
+      <python> cross_market.py --tags eur=term_eval usd=rfr_lm_eval gbp=rfr_lm_eval
+The headline metrics for the paper come from eval_daily.py; this script is for the
+figure and a quick table. ATM/liquid use the market forward (F_mkt) when the results
+file carries it (eval_daily output), otherwise the model forward.
 """
 import os, sys, argparse
 import numpy as np, pandas as pd, matplotlib
@@ -21,14 +25,18 @@ MKTS = [("eur", "EUR", "6M Euribor (IBOR)"), ("usd", "USD", "3M SOFR (RFR)"),
 
 _ap = argparse.ArgumentParser()
 _ap.add_argument("--tag", default="qe", help="results_<ccy>_HWH_<tag>.csv to read")
-_TAG = _ap.parse_args().tag
+_ap.add_argument("--tags", nargs="*", default=[], help="per-market overrides, e.g. eur=term_eval")
+_A = _ap.parse_args()
+_TAGS = dict(t.split("=", 1) for t in _A.tags)
 
 rows, present = [], []
 for ccy, LBL, underlying in MKTS:
-    p = os.path.join(RUNS, f"results_{ccy}_HWH_{_TAG}.csv")
+    p = os.path.join(RUNS, f"results_{ccy}_HWH_{_TAGS.get(ccy, _A.tag)}.csv")
     if not os.path.exists(p):
         continue
     r = pd.read_csv(p); r["strike"] = r.strike.astype(float)
+    if "F_mkt" in r:
+        r["F"] = r["F_mkt"]
     err = r.model_vol_bp - r.market_vol_bp
     # ATM = the single strike nearest the forward at each maturity. A fixed band
     # (e.g. |K-F|<30bp) can catch several strikes or none depending on the ladder,
@@ -62,8 +70,9 @@ if present:
     n = len(present)
     fig, axs = plt.subplots(2, n, figsize=(5 * n, 8), squeeze=False)
     for j, (ccy, LBL, r) in enumerate(present):
-        a = r[(r.strike - r.F).abs() < 0.003].groupby("t_fix").agg(
-            mkt=("market_vol_bp", "mean"), mdl=("model_vol_bp", "mean"))
+        a = r.loc[r.groupby("t_fix").apply(
+            lambda g: (g.strike - g.F).abs().idxmin(), include_groups=False)].set_index("t_fix")
+        a = a.rename(columns={"market_vol_bp": "mkt", "model_vol_bp": "mdl"})
         axs[0][j].plot(a.index, a.mkt, "k-o", ms=3, label="market")
         axs[0][j].plot(a.index, a.mdl, "r--s", ms=3, label="model")
         axs[0][j].set_title(f"{LBL} — ATM term structure"); axs[0][j].set_xlabel("maturity (Y)")
@@ -76,6 +85,6 @@ if present:
         axs[1][j].set_title(f"{LBL} — smile @ {T:.0f}Y (F~{F:.1f}%)")
         axs[1][j].set_xlabel("strike (%)"); axs[1][j].set_ylabel("vol (bp)")
         axs[1][j].legend(fontsize=8); axs[1][j].grid(alpha=.3)
-    fig.suptitle("Cross-market HWH calibration (QE, vega) — market vs model", fontsize=13, fontweight="bold")
+    fig.suptitle("Cross-market HWH calibration (daily grid) — market vs model", fontsize=13, fontweight="bold")
     plt.tight_layout(); p = os.path.join(FIG, "fig_cross_market.png")
     plt.savefig(p, dpi=110); print("\nwrote", os.path.basename(p))

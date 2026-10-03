@@ -2,6 +2,6 @@
 
 | market | underlying | caplets | RMSE (bp) | ATM MAE (bp) | liquid RMSE (bp) | rel % |
 |---|---|---|---|---|---|---|
-| EUR | 6M Euribor (IBOR) | 340 | 9.4 | 2.9 | 4.2 | 8.0 |
-| USD | 3M SOFR (RFR) | 680 | 14.2 | 5.6 | 8.0 | 12.0 |
-| GBP | 3M SONIA (RFR) | 680 | 16.8 | 5.2 | 7.8 | 14.4 |
+| EUR | 6M Euribor (IBOR) | 340 | 6.3 | 2.4 | 3.7 | 5.6 |
+| USD | 3M SOFR (RFR) | 697 | 11.6 | 3.5 | 6.3 | 8.6 |
+| GBP | 3M SONIA (RFR) | 697 | 15.4 | 4.8 | 8.3 | 13.1 |
