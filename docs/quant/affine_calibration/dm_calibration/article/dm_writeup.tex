@@ -31,15 +31,16 @@ rate in EUR, a compounded in-arrears overnight rate in USD and GBP---and inverte
 (normal) volatilities on the matching expiry convention. The CIR variance factors are sampled with the Andersen (2008) quadratic-exponential
 (QE) scheme, and the 27 parameters are estimated with a gradient-free Adam--SPSA optimiser under a
 vega-weighted objective. Against 340 caplets spanning maturities \(0.5\)--\(10\)Y and strikes
-\(-1.5\%\) to \(+10\%\), the model attains an overall normal-volatility RMSE of \(6.3\bp\), an
-at-the-money (ATM) mean absolute error of \(2.4\bp\), and a \(3.7\bp\) RMSE over the liquid
-(\(|K-F|<2\%\)) core. Pricing the Euribor caplet as the forward-looking contract it is, rather than
-as an in-arrears average, cuts the EUR error from \(8.6\) to \(6.3\bp\), with the gain spread across
-the \(1\)--\(10\)Y smile. Simulation is on a \emph{daily} grid (\(dt=1/252\)), on which every accrual
+\(-1.5\%\) to \(+10\%\), the model attains an overall normal-volatility RMSE of \(5.9\bp\), an
+at-the-money (ATM) mean absolute error of \(2.0\bp\), and a \(2.8\bp\) RMSE over the liquid
+(\(|K-F|<2\%\)) core. Two corrections matter as much as the model: pricing the Euribor caplet as the
+forward-looking contract it is, rather than as an in-arrears average, cuts the EUR error from
+\(8.6\) to \(6.3\bp\), and a deterministic shift that makes the model reprice the initial curves
+cuts the liquid-core error from \(3.7\) to \(2.8\bp\). Simulation is on a \emph{daily} grid (\(dt=1/252\)), on which every accrual
 window is a whole number of steps. A nested-model ladder shows that stochastic volatility is
 responsible for the bulk of the fit: the best flat-smile Gaussian restriction attains only
 \(\approx 45\bp\). The same model reproduces the USD (SOFR) and GBP (SONIA) in-arrears caplet
-surfaces from \(6\)M maturity out to \(7.6\) and \(7.8\bp\), with ATM errors of \(2.7\) and \(4.7\bp\).
+surfaces from \(6\)M maturity out to \(8.0\) and \(6.7\bp\), with ATM errors of \(2.2\) and \(4.2\bp\).
 \end{abstract}
 
 \medskip
@@ -163,12 +164,19 @@ a \emph{shared} level factor \(x\)---the common, essentially risk-free, movement
 rates---and an additive Hull--White \emph{basis} factor \(k\) that lives only on the projection
 curve:
 \begin{align}
-r_{\text{ois}}(t) &= f_{\text{ois}}(t) + x(t), \\
-r_{\text{proj}}(t) &= f_{\text{proj}}(t) + x(t) + k(t).
+r_{\text{ois}}(t) &= f_{\text{ois}}(t) + \varphi_{\text{ois}}(t) + x(t), \\
+r_{\text{proj}}(t) &= f_{\text{proj}}(t) + \varphi_{\text{proj}}(t) + x(t) + k(t).
 \end{align}
 The single shared \(x\) enforces that discounting and projection move together (a parallel shift in
 rates moves both curves by the same amount), while \(k\) lets the basis fluctuate around its market
-forward \(f_{\text{proj}}-f_{\text{ois}}\). The factor dynamics under the pricing measure are
+forward \(f_{\text{proj}}-f_{\text{ois}}\). The deterministic shifts \(\varphi\) make the model
+reprice the initial curves exactly. Without them the model discount factor would be
+\(P^{\text{mkt}}(T)\,\mathbb{E}[e^{-\int_0^T x}]\), and since \(\mathbb{E}[e^{-\int_0^T x}]>1\) the
+model forward would sit below the market forward---in our data by \(10\bp\) at \(5\)Y and
+\(22\)--\(37\bp\) at \(10\)Y. This is the Hull--White \(\varphi(t)\), or the CIR\(^{++}\)
+shift~\cite{brigo2006}, generalised to stochastic variance, where it has no closed form; we
+therefore fix it on the simulated path set itself (Section~\ref{sec:calib}). Because
+\(\varphi\) is deterministic it never enters the factor dynamics. The factor dynamics under the pricing measure are
 \begin{align}
 \mathrm{d}x(t) &= -\lambda\, x(t)\dt + \sqrt{V(t)}\;\dW^{x}(t), \\
 \mathrm{d}k(t) &= -\gamma\, k(t)\dt + \xi\;\dW^{k}(t), \\
@@ -260,9 +268,13 @@ keeps setting until \(t_{\text{fix}}+\tau\); with volatility decaying linearly t
 period the effective expiry is
 \(T_{\text{exp}}=t_{\text{fix}}+\tau/3\)~\cite{lyashenko2019,henrard2026}, and the first period
 \([0,\tau]\), which is not yet fixed at trade date, is a live caplet. Model and market are
-inverted with the same \(T_{\text{exp}}\), so they are compared on a common footing. That this
-matches the convention behind the vendor's flat RFR cap volatilities is an assumption we flag; the
-alternative (\(T_{\text{exp}}=t_{\text{fix}}+\tau\)) is a one-line change in the stripping.
+inverted with the same \(T_{\text{exp}}\), so they are compared on a common footing. This
+matches how the data vendor prices these caps: Bloomberg's swap manager values a SOFR cap off the
+same volatility cube as a strip of compounded in-arrears caplets, including the live first period,
+in a one-factor Hull--White model, i.e.\ with volatility carried through the accrual period, of
+which \(t_{\text{fix}}+\tau/3\) is the small-mean-reversion limit. The rate conventions (one-day
+lookback, one rate cut-off day, two-day payment delay) shift dates by one or two days, below what
+matters for the volatility.
 
 \section{Market data}
 Three market inputs are fed in, all sourced from Bloomberg:
@@ -274,7 +286,9 @@ Three market inputs are fed in, all sourced from Bloomberg:
   convention of Section~\ref{sec:instrument}.
 \end{itemize}
 For USD and GBP the projection curve is the OIS (SOFR, SONIA) curve itself: the caplets reference
-the overnight rate, so the two curves coincide and only the EUR fit exercises the basis factor.
+the overnight rate, so the two curves coincide and only the EUR fit exercises the basis factor. This
+is also the vendor's own set-up: the USD RFR volatility cube uses the SOFR curve both to project
+and to discount, and quotes cap volatilities in normal (Bachelier) terms.
 The calibration set used here is the sub-surface with \(t_{\text{fix}}\le 10\)Y: \(20\) maturities
 (\(0.5,1.0,\dots,10.0\)Y) \(\times\) \(17\) strikes (\(-1.5\%\) to \(+10\%\)), i.e.\ \(340\)
 caplets, fitted \emph{jointly} with one parameter vector.
@@ -289,6 +303,16 @@ regime the CIR is strongly Feller-violated (\(2\kappa\theta\ll\varepsilon^2\)); 
 with reflection biases the variance upward---most severely at short maturities, where it inflated
 the \(0.5\)Y ATM volatility from a market level of \(44\bp\) to over \(100\bp\)---whereas QE is
 moment-exact and places an honest point mass at zero in the exponential regime.
+
+\paragraph{Fitting the initial curves.} Only integrals of \(\varphi\) enter the prices, and only
+over the caplet dates. For discounting,
+\(\int_0^T\varphi_{\text{ois}} = \ln\mathbb{E}[e^{-\int_0^T x}]\), estimated on the same paths, so
+that \(D(T)=P^{\text{mkt}}(T)\). For projection, \(\int_{t_{\text{fix}}}^{t_{\text{fix}}+\tau}
+\varphi_{\text{proj}}\) is one constant per caplet in the exponent of \(R\), solved in closed form
+so that \(F=\mathbb{E}[R\,e^{-\int r_{\text{ois}}}]/D\) equals the market simple forward. The
+discount shift rescales price and \(D\) alike and leaves implied volatilities unchanged; the
+projection shift places each strike at the right moneyness. On the daily grid the model forwards
+then match the market to within \(0.2\bp\) at every maturity.
 
 \paragraph{Time step and the accrual window.} The in-arrears payoff compounds the rate over the
 accrual period \([T,T+\tau]\), and in discrete time that integral is taken over
@@ -316,13 +340,16 @@ best is retained.
 
 \section{Results}
 \subsection{Goodness of fit}
-Table~\ref{tab:fit} summarises the fit of the proposed model. The overall RMSE is \(6.3\bp\), the
-ATM term structure is reproduced to \(2.4\bp\) mean absolute error, and the liquid core
-(\(|K-F|<2\%\), \(F\) the market forward) is fitted to \(3.7\bp\). Reported figures are means over
-three Monte-Carlo seeds at \(2\times10^5\) paths, with the seed standard deviation. The second column
-re-prices, with the same evaluation, the previous calibration in which the Euribor caplet was treated
-as an in-arrears average: ATM and core are unchanged to within \(0.1\bp\), and the whole gain comes
-from the smile away from the money, at every maturity from \(1\)Y (bottom rows). Figure~\ref{fig:surface3d} overlays the entire calibrated
+Table~\ref{tab:fit} summarises the fit of the proposed model. The overall RMSE is \(5.9\bp\), the
+ATM term structure is reproduced to \(2.0\bp\) mean absolute error, and the liquid core
+(\(|K-F|<2\%\), \(F\) the market forward) is fitted to \(2.8\bp\). Reported figures are means over
+three Monte-Carlo seeds at \(2\times10^5\) paths, with the seed standard deviation. The other two
+columns re-price, with the same evaluation, the two earlier calibrations, and separate the two
+corrections. Treating Euribor as a term rate rather than an in-arrears average (third to second
+column) leaves ATM and core unchanged and removes a quarter of the error away from the money, at
+every maturity from \(1\)Y. Fitting the initial curves (second to first column) does the opposite:
+it places each strike at the market forward, and so tightens the ATM and liquid-core errors by a
+fifth and a quarter. Figure~\ref{fig:surface3d} overlays the entire calibrated
 surface on the market mesh; Figure~\ref{fig:review} then breaks the fit down into the ATM term
 structure, representative smile slices, and the signed residual surface.
 
@@ -339,23 +366,24 @@ non-uniform strike ladder does not warp the mesh.}
 
 \begin{table}[t]
 \centering
-\begin{tabular}{lrr}
+\begin{tabular}{lrrr}
 \toprule
-Metric (bp) & term payoff (proposed) & in-arrears average (previous) \\
+ & \textbf{proposed} & no curve fit & in-arrears \\
+Metric (bp) & term payoff + curve fit & term payoff & average \\
 \midrule
-Overall normal-vol RMSE & \(6.29\pm0.03\) & \(8.57\pm0.18\) \\
-ATM mean absolute error & \(2.42\pm0.01\) & \(2.34\pm0.01\) \\
-Liquid core RMSE (\(|K-F|<2\%\)) & \(3.73\pm0.01\) & \(3.66\pm0.01\) \\
+Overall normal-vol RMSE & \(\mathbf{5.90\pm0.02}\) & \(6.29\pm0.03\) & \(8.57\pm0.18\) \\
+ATM mean absolute error & \(\mathbf{1.98\pm0.08}\) & \(2.42\pm0.01\) & \(2.34\pm0.01\) \\
+Liquid core RMSE (\(|K-F|<2\%\)) & \(\mathbf{2.81\pm0.02}\) & \(3.73\pm0.01\) & \(3.66\pm0.01\) \\
 \midrule
-RMSE, \(0.5\)--\(1\)Y & \(14.7\) & \(16.8\) \\
-RMSE, \(1\)--\(3\)Y & \(6.2\) & \(9.5\) \\
-RMSE, \(3\)--\(7\)Y & \(4.2\) & \(7.2\) \\
-RMSE, \(7\)--\(10\)Y & \(3.2\) & \(4.9\) \\
+RMSE, \(0.5\)--\(1\)Y & \(13.7\) & \(14.7\) & \(16.8\) \\
+RMSE, \(1\)--\(3\)Y & \(5.1\) & \(6.2\) & \(9.5\) \\
+RMSE, \(3\)--\(7\)Y & \(4.5\) & \(4.2\) & \(7.2\) \\
+RMSE, \(7\)--\(10\)Y & \(3.0\) & \(3.2\) & \(4.9\) \\
 \bottomrule
 \end{tabular}
 \caption{Fit of the calibrated 2F lifted-CIR HWH model on the EUR surface (\(340\) caplets, \(27\)
 parameters, daily step \(dt=1/252\), QE simulation, vega-weighted objective). Means \(\pm\) standard
-deviation over three seeds at \(2\times10^5\) paths; both columns evaluated by the same procedure.}
+deviation over three seeds at \(2\times10^5\) paths; all columns evaluated by the same procedure.}
 \label{tab:fit}
 \end{table}
 
@@ -387,7 +415,7 @@ and deterministic-vol rungs have \(\varepsilon=0\), so their variance is determi
 simulation scheme is immaterial; they define the strike-flat baseline (\(\approx 45\bp\)). Only the
 stochastic-volatility model reduces the RMSE below it. The SV model is additionally vega-weighted to
 tighten the liquid core (Section~\ref{sec:calib}). All rungs share \(dt=0.02\) and the earlier
-in-arrears payoff; the headline daily-step, term-payoff fit of the HWH model is \(6.3\bp\)
+in-arrears payoff; the headline daily-step, term-payoff, curve-fitted HWH model is at \(5.9\bp\)
 (Table~\ref{tab:fit}).}
 \label{tab:ladder}
 \end{table}
@@ -402,15 +430,14 @@ basis-factor reversions \(\lambda,\gamma\), the basis vol \(\xi\), and the initi
 reported as \(\sqrt{\theta}\times10^4\) (the instantaneous vol scale in bp, before mean reversion
 pulls the caplet implied vol below it).
 
-The estimates are economically sensible: a fast/slow variance pair (\(\kappa_f=1.50\),
-\(\kappa_s=0.095\)) mixed with weight \(w=0.81\); a moderate vol-of-vol \(\varepsilon=0.10\); a
-slowly mean-reverting level factor (\(\lambda=0.18\)); and a \emph{positive} leverage \(\rho\),
-\(0.46\) at 1Y and \(0.58\) at 5Y before falling to \(0.14\) at 10Y, consistent with the right-skewed
-(payer) cap smile. The Hull--White basis volatility is small (\(\xi=1.2\times10^{-3}\)), so the
-Euribor--OIS basis is close to deterministic---it follows its market forward with only a small
-mean-reverting fluctuation. The fast reversion \(\kappa_f\) sits at the lower bound of its search
-range (\(1.5\)), as it did in the earlier fits; the optimiser would take a slower fast factor if
-allowed, which we leave as a robustness check.
+The estimates are economically sensible: a fast/slow variance pair (\(\kappa_f=1.56\),
+\(\kappa_s=0.19\)) mixed with weight \(w=0.86\); a moderate vol-of-vol \(\varepsilon=0.10\); a
+slowly mean-reverting level factor (\(\lambda=0.19\)); and a \emph{positive} leverage \(\rho\),
+\(0.53\) at 1Y and \(0.63\) at 5Y before falling to \(0.18\) at 10Y, consistent with the right-skewed
+(payer) cap smile. The basis factor is persistent (\(\gamma=0.03\)) with volatility
+\(\xi=24\bp\) per \(\sqrt{\text{year}}\): the Euribor--OIS basis wanders slowly around its market
+forward rather than snapping back to it. The fast reversion \(\kappa_f\) lies just above the lower
+bound of its search range (\(1.5\)), where the earlier fits sat.
 
 \begin{table}[t]
 \centering
@@ -418,8 +445,8 @@ allowed, which we leave as a robustness check.
 \toprule
 node (yr) & 0.25 & 0.5 & 1 & 2 & 3 & 5 & 7 & 10 \\
 \midrule
-\(\sqrt{\theta_1}\) (bp) & 99.5 & 147.4 & 159.7 & 174.7 & 146.6 & 190.2 & 173.1 & 199.1 \\
-\(\sqrt{\theta_2}\) (bp) & 20.1 & 161.6 & 111.6 & 173.9 & 153.3 & 112.8 & 109.1 & 153.5 \\
+\(\sqrt{\theta_1}\) (bp) & 82.7 & 143.7 & 151.5 & 160.5 & 141.1 & 176.3 & 167.5 & 180.1 \\
+\(\sqrt{\theta_2}\) (bp) & 92.4 & 158.3 & 101.6 & 169.9 & 200.6 & 131.8 & 81.6 & 172.5 \\
 \bottomrule
 \end{tabular}
 \caption{Calibrated long-run variance term structures (fast factor \(\theta_1\), slow factor
@@ -434,11 +461,11 @@ node (yr) & 0.25 & 0.5 & 1 & 2 & 3 & 5 & 7 & 10 \\
 \(\kappa_f\) & \(\kappa_s\) & \(w\) & \(\varepsilon\) & \(\lambda\) & \(\gamma\) & \(\xi\) &
 \(V_0\) & \\
 \midrule
-1.50 & 0.095 & 0.81 & 0.10 & 0.18 & 0.24 & \(1.2\!\times\!10^{-3}\) & 0 & \\
+1.56 & 0.19 & 0.86 & 0.10 & 0.19 & 0.03 & \(2.4\!\times\!10^{-3}\) & 0 & \\
 \midrule
 \multicolumn{2}{l}{leverage} & \(\rho(1\text{Y})\) & \(\rho(5\text{Y})\) & \(\rho(10\text{Y})\) &
 \multicolumn{4}{l}{} \\
-& & 0.461 & 0.576 & 0.140 & \multicolumn{4}{l}{} \\
+& & 0.531 & 0.634 & 0.180 & \multicolumn{4}{l}{} \\
 \bottomrule
 \end{tabular}
 \caption{Calibrated scalar parameters (top) and the \(3\)-node leverage term structure (bottom).}
@@ -477,10 +504,11 @@ conventions and surface sizes (USD/GBP carry \(697\) caplets on the 3M grid, inc
 period, vs \(340\) for EUR). The RFR headline is computed from \(t_{\text{fix}}\ge0.5\)Y: the first
 caplet (\(t_{\text{fix}}=0\), effective expiry \(\tau/3\approx1\)M) has near-intrinsic wings whose
 inverted volatilities are numerically meaningless, and we report it separately rather than let it
-dominate the average. From \(1\)Y the three markets are fitted to similar accuracy (\(3\)--\(7\bp\) by
-maturity bucket); the RFR short end is weaker (Section~\ref{sec:discussion}). On the GBP surface, which
-is the one whose curves are unchanged, the same evaluation of the earlier calibration gives \(9.6\bp\)
-from \(6\)M, against \(7.8\bp\) now.
+dominate the average. From \(3\)Y the three markets are fitted to similar accuracy (\(3\)--\(6\bp\) by
+maturity bucket); below that the RFR markets are weaker, USD between \(1\) and \(3\)Y (\(12.9\bp\)) and
+GBP below \(1\)Y (Section~\ref{sec:discussion}). On the GBP surface, which is the one whose curves are
+unchanged, the same evaluation of the earlier calibration gives \(9.6\bp\) from \(6\)M, against
+\(6.7\bp\) now.
 Figure~\ref{fig:cross} shows the market-vs-model ATM term structure and \(5\)Y smile for each.
 
 \begin{table}[t]
@@ -489,17 +517,18 @@ Figure~\ref{fig:cross} shows the market-vs-model ATM term structure and \(5\)Y s
 \toprule
 market & payoff & caplets & RMSE & ATM MAE & liquid RMSE & full-surface RMSE \\
 \midrule
-EUR & 6M Euribor, term     & 340 & \(6.29\) & \(2.42\) & \(3.73\) & \(6.29\) \\
-USD & 3M SOFR, in-arrears  & 697 & \(7.61\) & \(2.73\) & \(3.79\) & \(16.96\) \\
-GBP & 3M SONIA, in-arrears & 697 & \(7.77\) & \(4.68\) & \(4.81\) & \(19.30\) \\
+EUR & 6M Euribor, term     & 340 & \(5.90\) & \(1.98\) & \(2.81\) & \(5.90\) \\
+USD & 3M SOFR, in-arrears  & 697 & \(7.98\) & \(2.17\) & \(3.96\) & \(16.04\) \\
+GBP & 3M SONIA, in-arrears & 697 & \(6.72\) & \(4.21\) & \(4.52\) & \(18.25\) \\
 \bottomrule
 \end{tabular}
 \caption{Cross-market robustness: the same model and calibration on three caplet surfaces, all on
 the daily grid \(dt=1/252\) at \(800\) SPSA iterations. All figures in bp; the first three error
 columns are over \(t_{\text{fix}}\ge0.5\)Y (the whole EUR surface), the last over the full surface
-including the first RFR caplet, whose own RMSE is \(69\) (USD) and \(80\bp\) (GBP). Means over three
-seeds at \(2\times10^5\) paths; the seed standard deviation of the headline RMSE is \(0.03\) (EUR),
-\(0.05\) (USD) and \(0.85\bp\) (GBP), and is below \(0.1\bp\) on the ATM and liquid-core columns.}
+including the first RFR caplet, whose own RMSE is \(63\) (USD) and \(77\bp\) (GBP). Means over three
+seeds at \(2\times10^5\) paths; the seed standard deviation of the headline RMSE is \(0.02\) (EUR),
+\(0.08\) (USD) and \(0.27\bp\) (GBP), and is below \(0.1\bp\) on the ATM and liquid-core columns.
+All three fits include the initial-curve shift.}
 \label{tab:cross}
 \end{table}
 
@@ -516,35 +545,31 @@ constant between quoted cap maturities.}
 \section{Discussion and further work}
 \label{sec:discussion}
 The model reproduces the EUR caplet surface across the whole strike/maturity range with a single
-parameter set, and the RFR surfaces from \(6\)M out. Getting the instrument right mattered as much
-as the model: treating Euribor as the forward-looking term rate it is, rather than as an in-arrears
-average, removed a quarter of the EUR error. The remaining residuals are these.
+parameter set, and the RFR surfaces from \(6\)M out. Getting the instrument and the curves right
+mattered as much as the model: treating Euribor as the forward-looking term rate it is removed a
+quarter of the EUR error away from the money, and repricing the initial curves removed a quarter of
+the liquid-core error. The remaining residuals are these.
 
-\emph{The short end.} Below \(1\)Y the model undershoots the ATM level: in EUR \(36\) against
-\(44\bp\) at \(0.5\)Y and \(58\) against \(72\bp\) at \(1\)Y, and in GBP \(38\) against \(52\bp\) at
-\(0.5\)Y. Part of this is in the data---the EUR \(1\)Y point sits above the \(1.5\)Y point, and the
+\emph{The short end.} Below \(1.5\)Y the model undershoots the ATM level: in EUR \(39\) against
+\(44\bp\) at \(0.5\)Y and \(61\) against \(72\bp\) at \(1\)Y, and in GBP \(35\) against \(52\bp\) at
+\(0.5\)Y and \(52\) against \(78\bp\) at \(1\)Y; USD is closer (\(70\) against \(74\bp\) at
+\(0.5\)Y). Part of this is in the data---the EUR \(1\)Y point sits above the \(1.5\)Y point, and the
 stripped surface is piecewise flat between cap maturities---but a diffusion with mean-reverting
 variance also struggles to build a short-dated hump. Jumps around policy dates~\cite{andersenbang2024}
-are the natural extension, as is a joint check of the RFR expiry convention
-(Section~\ref{sec:instrument}), on which the short-end RFR volatilities depend most.
+are the natural extension.
 
 \emph{Near-intrinsic wings.} The short-dated deep-ITM and far-OTM strikes carry almost no vega; their
 inverted volatilities are ill-conditioned, are down-weighted by design, and dominate the
 full-surface RMSE of the RFR markets through the first caplet.
 
-\emph{The initial curve.} The factors are added to the market forward curves without a convexity
-correction, so the model forward drifts below the market forward with maturity: by \(9\)--\(11\bp\)
-at \(5\)Y and \(22\)--\(37\bp\) at \(10\)Y across the three markets. Strikes are therefore read at a
-slightly displaced forward at the long end. A deterministic shift fitted to the initial discount
-curves under the calibrated dynamics, in the spirit of the CIR++ extension~\cite{brigo2006}, removes
-this exactly and is the first item of further work.
+\emph{Parameter bounds.} \(\kappa_f\) calibrates just above the lower bound of its range; relaxing
+that bound is a robustness check still to run.
 
-\emph{Parameter bounds.} \(\kappa_f\) calibrates to the lower bound of its range, so that bound
-should be relaxed and the fit repeated.
-
-Planned extensions: (i) the deterministic-shift curve fit above; (ii) re-running the nested ladder
-with the term payoff and daily step; (iii) calibrating the full surface to \(29.5\)Y (the stripped
-surface already carries these quotes); and (iv) an out-of-sample check by repricing ATM
+Planned extensions: (i) re-running the nested ladder with the term payoff and daily step;
+(ii) calibrating the full surface to \(29.5\)Y (the stripped surface already carries these
+quotes); (iii) replacing the path-set estimate of \(\varphi\) by its exact value from the affine
+(Riccati) bond-price equations of the model, which the next item needs anyway; and (iv) an
+out-of-sample check by repricing ATM
 swaptions---which do not enter the calibration---with the calibrated parameters. Because a swaption probes the
 \emph{correlation} between forward rates that a caplet surface only partly constrains, this is the
 most informative remaining test; it requires bond reconstruction at the option expiry under
