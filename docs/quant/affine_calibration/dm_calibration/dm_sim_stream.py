@@ -45,7 +45,11 @@ def _qe_step(Vt, th, e, ep2, k, Z, U, psi_c=1.5, om_e=None):
         U <= p, torch.zeros_like(Vt),
         torch.log(((1 - p) / (1 - U).clamp(min=1e-30))).clamp(min=0.0) / (beta + 1e-30))
     Vnew = torch.where(psi <= psi_c, Vq, Ve).clamp(min=0.0)
-    return Vnew, (Vnew - m) / torch.sqrt(s2.clamp(min=1e-30))
+    # eps=0 (the Gaussian/deterministic-vol ladder rungs) gives s2 == 0 exactly: the variance
+    # step is deterministic and (V-m)/s is 0/0, so fall back to the driving normal Z, which is
+    # what the quadratic branch's innovation tends to as s2 -> 0.
+    xi = torch.where(s2 > 0, (Vnew - m) / torch.sqrt(s2.clamp(min=1e-30)), Z)
+    return Vnew, xi
 
 
 # ----------------------------------------------------------------- draws
