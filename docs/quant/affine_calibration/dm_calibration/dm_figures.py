@@ -171,6 +171,13 @@ def ladder_frame(ccy, suffix=""):
         if os.path.exists(p):
             r = pd.read_csv(p)
             rmse = float(np.sqrt(((r.model_vol_bp - r.market_vol_bp) ** 2).mean()))
+            if suffix.endswith("_eval"):                   # use the per-seed mean, as in the paper
+                tag, mdl = suffix[1:-len("_eval")], m[:-len(suffix)]
+                js = os.path.join(HERE, "article", "results",
+                                  f"eval_{ccy}_{tag}" + ("" if mdl == "HWH" else f"_{mdl}") + ".json")
+                if os.path.exists(js):
+                    import json
+                    rmse = json.load(open(js))["summary"]["rmse_bp"]["mean"]
             rows.append({"model": m, "rmse_bp": round(rmse, 1), "n_caplets": len(r)})
     return pd.DataFrame(rows)
 

@@ -389,34 +389,34 @@ deviation over three seeds at \(2\times10^5\) paths; all columns evaluated by th
 
 \subsection{Nested-model ladder}
 \label{sec:ladder}
-Table~\ref{tab:ladder} decomposes the fit across the nested restrictions on identical data. The
-Gaussian restrictions (flat smile) and the deterministic-vol term structure all sit near
-\(45\)--\(47\bp\); introducing the two-factor stochastic variance (HWH) reduces the RMSE to
-\(9.4\bp\). Stochastic volatility, not additional Gaussian factors, is what fits the surface. The
-ladder is a comparison \emph{between model classes}, so all four rungs are run at a common
-\(dt=0.02\)---exact for the \(6\)M EUR accrual window---and with the earlier in-arrears payoff, rather
-than with the daily step and term payoff of the headline fit; the relative ordering is what the table
-establishes.
+Table~\ref{tab:ladder} decomposes the fit across the nested restrictions on identical data, with
+every rung calibrated and evaluated exactly as the headline fit: daily step, Euribor term payoff,
+initial-curve fit, vega-weighted objective, \(800\) SPSA iterations, three seeds at
+\(2\times10^5\) paths. The Gaussian restrictions (flat smile) and the deterministic-vol term
+structure all sit at \(45\)--\(47\bp\), with ATM and liquid-core errors near \(20\bp\); introducing
+the two-factor stochastic variance (HWH) reduces these to \(5.9\), \(2.0\) and \(2.8\bp\). A second
+Gaussian factor does not help, and neither does a deterministic volatility term structure:
+stochastic volatility is what fits the surface, at the money as well as in the wings.
 
 \begin{table}[t]
 \centering
-\begin{tabular}{lccc}
+\begin{tabular}{lcccrrr}
 \toprule
-Model & Smile & Vol-of-vol \(\varepsilon\) & RMSE (bp) \\
+Model & Smile & \(\varepsilon\) & & RMSE & ATM MAE & core RMSE \\
 \midrule
-1F Gaussian Hull--White        & flat            & 0 & 46.1 \\
-2F Gaussian Hull--White        & flat            & 0 & 47.0 \\
-Hull--White + deterministic vol& term-structure  & 0 & 45.3 \\
-\textbf{2F lifted-CIR HWH (proposed)} & \textbf{full} & \(\mathbf{0.11}\) & \(\mathbf{9.4}\) \\
+1F Gaussian Hull--White         & flat           & 0 & & \(46.7\) & \(18.7\) & \(18.9\) \\
+2F Gaussian Hull--White         & flat           & 0 & & \(47.1\) & \(18.4\) & \(18.2\) \\
+Hull--White + deterministic vol & term structure & 0 & & \(45.3\) & \(21.2\) & \(21.3\) \\
+\textbf{2F lifted-CIR HWH (proposed)} & \textbf{full} & \(\mathbf{0.10}\) & & \(\mathbf{5.9}\) &
+\(\mathbf{2.0}\) & \(\mathbf{2.8}\) \\
 \bottomrule
 \end{tabular}
-\caption{Nested-model ladder on the EUR surface, all models fit to the full surface. The Gaussian
-and deterministic-vol rungs have \(\varepsilon=0\), so their variance is deterministic and the
-simulation scheme is immaterial; they define the strike-flat baseline (\(\approx 45\bp\)). Only the
-stochastic-volatility model reduces the RMSE below it. The SV model is additionally vega-weighted to
-tighten the liquid core (Section~\ref{sec:calib}). All rungs share \(dt=0.02\) and the earlier
-in-arrears payoff; the headline daily-step, term-payoff, curve-fitted HWH model is at \(5.9\bp\)
-(Table~\ref{tab:fit}).}
+\caption{Nested-model ladder on the EUR surface (\(340\) caplets), errors in bp. All rungs are fitted
+and evaluated by the same procedure as the headline fit (daily step, term payoff, initial-curve
+fit, vega-weighted objective; means over three seeds at \(2\times10^5\) paths, seed standard
+deviation below \(0.6\bp\) on the RMSE and \(0.1\bp\) on the other columns). The Gaussian and
+deterministic-vol rungs have \(\varepsilon=0\), so their variance is deterministic and their smile
+strike-flat; they define the baseline that only the stochastic-volatility model breaks.}
 \label{tab:ladder}
 \end{table}
 
@@ -488,7 +488,7 @@ their deep-ITM wing, where the near-intrinsic quotes carry negligible vega.}
 \includegraphics[width=\textwidth]{fig_eur_ladder.png}
 \caption{Nested-model ladder: RMSE bars (left), ATM term structure (centre), and the \(5\)Y smile
 (right). The Gaussian/deterministic-vol rungs are strike-flat; only the stochastic-volatility model
-follows the market smile. All rungs at \(dt=0.02\) with the earlier in-arrears payoff, as in
+follows the market smile, and only it tracks the ATM term structure. Same set-up as
 Table~\ref{tab:ladder}.}
 \label{fig:ladder}
 \end{figure}
@@ -565,10 +565,9 @@ full-surface RMSE of the RFR markets through the first caplet.
 \emph{Parameter bounds.} \(\kappa_f\) calibrates just above the lower bound of its range; relaxing
 that bound is a robustness check still to run.
 
-Planned extensions: (i) re-running the nested ladder with the term payoff and daily step;
-(ii) calibrating the full surface to \(29.5\)Y (the stripped surface already carries these
-quotes); (iii) replacing the path-set estimate of \(\varphi\) by its exact value from the affine
-(Riccati) bond-price equations of the model, which the next item needs anyway; and (iv) an
+Planned extensions: (i) calibrating the full surface to \(29.5\)Y (the stripped surface already carries these
+quotes); (ii) replacing the path-set estimate of \(\varphi\) by its exact value from the affine
+(Riccati) bond-price equations of the model, which the next item needs anyway; and (iii) an
 out-of-sample check by repricing ATM
 swaptions---which do not enter the calibration---with the calibrated parameters. Because a swaption probes the
 \emph{correlation} between forward rates that a caplet surface only partly constrains, this is the

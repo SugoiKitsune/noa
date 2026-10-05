@@ -2,7 +2,7 @@
 
 *Branch `ap_calib` on the fork (SugoiKitsune/noa). Paper: `article/dm_writeup.tex` (→ 15-page PDF).
 Model/data reference: `MODEL_SPEC.md`. Swaption plan: `article/SWAPTION_OOS_PLAN.md`.
-Last updated 4 Oct 2026.*
+Last updated 5 Oct 2026.*
 
 ## Model
 Two-factor **lifted-CIR Hull–White–Heston**, genuinely **multi-curve** (OIS/€STR discount + 6M
@@ -22,8 +22,9 @@ USD/GBP headline over t_fix ≥ 0.5Y; the first RFR caplet (t_fix=0, effective e
 near-intrinsic wings and is reported separately. Runs: tags `term_fc` (EUR) and `rfr_lm_fc`
 (USD/GBP), all with `--fit_curve`, 800 iters warm-started from `term` / `rfr_lm`.
 
-Nested ladder (Roland rec 2, dt=0.02, earlier in-arrears payoff): 1F/2F Gaussian ~46–47,
-HW+det-vol 45.3 → **HWH 9.4** — SV is worth ~36 bp.
+Nested ladder (Roland rec 2; rerun 5 Oct on the headline set-up — daily, term payoff, curve fit,
+3-seed eval): 1F Gaussian 46.7 / 2F Gaussian 47.1 / HW+det-vol 45.3 → **HWH 5.9 bp**; ATM and
+liquid-core errors ~18–21 bp for every Gaussian rung vs 2.0 / 2.8 for HWH.
 
 ## Key findings
 1. **Instrument conventions (Oct 2026, after Henrard 2nd ed., Roland's literature request).** EUR was
@@ -52,7 +53,6 @@ HW+det-vol 45.3 → **HWH 9.4** — SV is worth ~36 bp.
 ## Open items (priority order)
 1. **Swaption out-of-sample validation** — plan written; build on exact Riccati bond prices
    (also gives φ(t) exactly instead of on the path set). SWPM 1Y×5Y ATM = 111.52 bp as a check.
-2. **Ladder rerun** with the term payoff, daily step and curve fit (current: dt=0.02, old payoff).
-3. **Short-end ATM undershoot** (EUR 0.5–1Y, GBP 0–1Y, USD 1–3Y) — jumps (Roland rec 1; Andersen–Bang).
-4. **κ_f bound** (1.56 vs bound 1.5) — relax and refit as a robustness check.
-5. SONIA cap SWPM check (only SOFR was checked; same convention assumed).
+2. **Short-end ATM undershoot** (EUR 0.5–1Y, GBP 0–1Y, USD 1–3Y) — jumps (Roland rec 1; Andersen–Bang).
+3. **κ_f bound** (1.56 vs bound 1.5) — relax and refit as a robustness check.
+4. SONIA cap SWPM check (only SOFR was checked; same convention assumed).
