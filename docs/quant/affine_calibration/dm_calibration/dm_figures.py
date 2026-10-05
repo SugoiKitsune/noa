@@ -148,10 +148,25 @@ LADDER_MODELS = ["1F_Gauss", "2F_Gauss", "HW_detvol", "HWH_qe"]   # HWH_qe = fin
 _DISP = {"HWH_qe": "HWH"}                                          # display label
 
 
-def ladder_frame(ccy):
+def _ladder_runs(suffix):
+    """(file model, display label) pairs. suffix='' reads the Aug dt=0.02 ladder
+    (results_<ccy>_<m>.csv); e.g. '_term_fc_eval' reads the eval_daily outputs of the
+    current set-up, whose full-model file is HWH<suffix>."""
+    if not suffix:
+        return [(m, _DISP.get(m, m)) for m in LADDER_MODELS]
+    return [(m + suffix, m) for m in ["1F_Gauss", "2F_Gauss", "HW_detvol", "HWH"]]
+
+
+def _atm(r):
+    """ATM rows: nearest strike to the market forward when the file has it (eval output)."""
+    F = r.F_mkt if "F_mkt" in r else r.F
+    return r.loc[(r.strike - F).abs().groupby(r.t_fix).idxmin()].set_index("t_fix")
+
+
+def ladder_frame(ccy, suffix=""):
     """RMSE per ladder model from whatever results CSVs exist (Roland rec 2 table)."""
     rows = []
-    for m in LADDER_MODELS:
+    for m, _ in _ladder_runs(suffix):
         p = os.path.join(HERE, "runs", f"results_{ccy}_{m}.csv")
         if os.path.exists(p):
             r = pd.read_csv(p)
@@ -160,34 +175,34 @@ def ladder_frame(ccy):
     return pd.DataFrame(rows)
 
 
-def fig_ladder(ccy, smile_T=5):
+def fig_ladder(ccy, smile_T=5, suffix=""):
     """3-panel nested-model ladder: RMSE bars | ATM term structure | smile — all vs market."""
     fig, axs = plt.subplots(1, 3, figsize=(16, 4.6))
-    lf = ladder_frame(ccy)
+    lf = ladder_frame(ccy, suffix)
+    label = dict(_ladder_runs(suffix))
     if len(lf):
-        axs[0].bar([_DISP.get(m, m) for m in lf.model], lf.rmse_bp,
-                   color=[GOLD if m == "HWH_qe" else GREY for m in lf.model])
+        axs[0].bar([label[m] for m in lf.model], lf.rmse_bp,
+                   color=[GOLD if label[m] == "HWH" else GREY for m in lf.model])
         for i, v in enumerate(lf.rmse_bp):
             axs[0].text(i, v, f"{v}", ha="center", va="bottom", fontsize=9)
     axs[0].set_ylabel("vol-RMSE (bp)"); axs[0].set_title(f"{ccy.upper()} nested-model ladder")
     axs[0].tick_params(axis="x", rotation=20)
     first = True
-    for m in LADDER_MODELS:
+    for m, lab in _ladder_runs(suffix):
         p = os.path.join(HERE, "runs", f"results_{ccy}_{m}.csv")
         if not os.path.exists(p):
             continue
         r = pd.read_csv(p); r["strike"] = r.strike.astype(float)
         av = sorted(r.t_fix.unique()); Tn = min(av, key=lambda x: abs(x - smile_T))
+        a = _atm(r)
         if first:
-            g0 = r[(r.strike - r.F).abs() < 0.003].groupby("t_fix").market_vol_bp.mean()
-            axs[1].plot(g0.index, g0.values, "k-", lw=2, label="market")
+            axs[1].plot(a.index, a.market_vol_bp, "k-", lw=2, label="market")
             s0 = r[np.isclose(r.t_fix, Tn)].sort_values("strike")
             axs[2].plot(s0.strike * 100, s0.market_vol_bp, "k-", lw=2, label="market")
             first = False
-        g = r[(r.strike - r.F).abs() < 0.003].groupby("t_fix").model_vol_bp.mean()
-        axs[1].plot(g.index, g.values, "--", label=_DISP.get(m, m))
+        axs[1].plot(a.index, a.model_vol_bp, "--", label=lab)
         s = r[np.isclose(r.t_fix, Tn)].sort_values("strike")
-        axs[2].plot(s.strike * 100, s.model_vol_bp, "--", label=_DISP.get(m, m))
+        axs[2].plot(s.strike * 100, s.model_vol_bp, "--", label=lab)
     axs[1].set_xlabel("Maturity (Y)"); axs[1].set_ylabel("ATM vol (bp)")
     axs[1].set_title("ATM term structure"); axs[1].legend(fontsize=8)
     axs[2].set_xlabel("Strike (%)"); axs[2].set_ylabel("vol (bp)")
@@ -204,7 +219,14 @@ def main():
     ap.add_argument("--ccy", default="eur")
     ap.add_argument("--market", action="store_true", help="market-only figures (no results needed)")
     ap.add_argument("--results", default=None, help="path to results CSV for overlay + metrics")
+    ap.add_argument("--ladder", default=None, metavar="SUFFIX",
+                    help="only draw the ladder figure, from results_<ccy>_<model><SUFFIX>.csv "
+                         "(e.g. _term_fc_eval); use '' for the Aug dt=0.02 ladder")
     args = ap.parse_args()
+    if args.ladder is not None:
+        print("wrote", os.path.relpath(fig_ladder(args.ccy, suffix=args.ladder), HERE))
+        print(ladder_frame(args.ccy, args.ladder).to_string(index=False))
+        return
     if args.market or not args.results:
         print("wrote", os.path.relpath(fig_market_surface(args.ccy), HERE))
         print("wrote", os.path.relpath(fig_smile(args.ccy), HERE))

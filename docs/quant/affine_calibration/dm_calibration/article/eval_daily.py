@@ -16,7 +16,8 @@ dm_writeup.tex: the numbers there should be copied from results/eval_<ccy>_<tag>
 Writes (committable, aggregate only -- no per-caplet market vols):
   article/results/eval_<ccy>_<tag>.json / .md
 and the seed-averaged per-caplet surface (gitignored) for the figures:
-  runs/results_<ccy>_HWH_<tag>_eval.csv
+  runs/results_<ccy>_<model>_<tag>_eval.csv   (eval_* outputs get a _<model> suffix
+                                               for the nested-ladder rungs, model != HWH)
 
 Run:  <ml-python> eval_daily.py --ccy eur --tag term [--paths 200000 --seeds 7 8 9]
 
@@ -40,13 +41,14 @@ OUT = os.path.join(HERE, "results")
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ccy", required=True)
-    ap.add_argument("--tag", required=True, help="checkpoint runs/calibration_weights/<ccy>_HWH_<tag>.pt")
+    ap.add_argument("--tag", required=True, help="checkpoint runs/calibration_weights/<ccy>_<model>_<tag>.pt")
+    ap.add_argument("--model", default="HWH", help="HWH or a ladder rung: 1F_Gauss, 2F_Gauss, HW_detvol")
     ap.add_argument("--paths", type=int, default=200000)
     ap.add_argument("--seeds", type=int, nargs="+", default=[7, 8, 9])
     a = ap.parse_args()
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    ck = torch.load(os.path.join(RUNS, "calibration_weights", f"{a.ccy}_HWH_{a.tag}.pt"),
+    ck = torch.load(os.path.join(RUNS, "calibration_weights", f"{a.ccy}_{a.model}_{a.tag}.pt"),
                     map_location=dev)
     payoff = ck.get("payoff", "arrears_avg")
     surface = ck.get("surface", "vol_surface.csv")
@@ -55,7 +57,8 @@ def main():
     print(f"{a.ccy}/{a.tag}: dt={dt:.6f} payoff={payoff} surface={surface} "
           f"fit_curve={fit_curve} paths={a.paths} seeds={a.seeds}", flush=True)
 
-    obj = B.build_objective(a.ccy, dev, dt=dt, max_mat=max_mat, payoff=payoff, surface=surface,
+    obj = B.build_objective(a.ccy, dev, model=a.model, dt=dt, max_mat=max_mat, payoff=payoff,
+                            surface=surface,
                             fit_curve=fit_curve)
     c = obj["caplets"]
     mkt = obj["mkt"].cpu().numpy()
@@ -96,19 +99,20 @@ def main():
     df = pd.DataFrame(rows)
     summ = {k: {"mean": round(float(df[k].mean()), 2), "std": round(float(df[k].std(ddof=1)), 2)}
             for k in df.columns if k != "seed"}
-    meta = dict(ccy=a.ccy, tag=a.tag, dt=dt, payoff=payoff, surface=surface, max_mat=max_mat,
+    meta = dict(ccy=a.ccy, tag=a.tag, model=a.model, dt=dt, payoff=payoff, surface=surface, max_mat=max_mat,
                 fit_curve=fit_curve,
                 n_caplets=int(len(c)), paths=a.paths, seeds=a.seeds,
                 train_rmse_bp=ck.get("rmse_bp"), iters=ck.get("iters"), init=ck.get("init"))
     os.makedirs(OUT, exist_ok=True)
-    with open(os.path.join(OUT, f"eval_{a.ccy}_{a.tag}.json"), "w") as f:
+    stem = f"eval_{a.ccy}_{a.tag}" + ("" if a.model == "HWH" else f"_{a.model}")
+    with open(os.path.join(OUT, f"{stem}.json"), "w") as f:
         json.dump(dict(meta=meta, summary=summ, per_seed=rows), f, indent=2)
     md = [f"# {a.ccy.upper()} / {a.tag} -- {len(a.seeds)}-seed evaluation",
           "", f"dt={dt:.6f}, payoff `{payoff}`, surface `{surface}`, {len(c)} caplets, "
               f"{a.paths} paths, seeds {a.seeds}", "",
           "| metric | mean | std |", "|---|---|---|"]
     md += [f"| {k} | {v['mean']:.2f} | {v['std']:.2f} |" for k, v in summ.items()]
-    with open(os.path.join(OUT, f"eval_{a.ccy}_{a.tag}.md"), "w") as f:
+    with open(os.path.join(OUT, f"{stem}.md"), "w") as f:
         f.write("\n".join(md) + "\n")
 
     res = c[["t_fix", "strike"]].copy()
@@ -116,7 +120,7 @@ def main():
     res["model_vol_bp"] = np.mean(vols, axis=0)
     res["F"] = np.mean(Fs, axis=0)
     res["F_mkt"] = F_mkt
-    res.to_csv(os.path.join(RUNS, f"results_{a.ccy}_HWH_{a.tag}_eval.csv"), index=False)
+    res.to_csv(os.path.join(RUNS, f"results_{a.ccy}_{a.model}_{a.tag}_eval.csv"), index=False)
     print(json.dumps(summ, indent=2))
 
 
