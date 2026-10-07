@@ -452,7 +452,11 @@ slowly mean-reverting level factor (\(\lambda=0.19\)); and a \emph{positive} lev
 (payer) cap smile. The basis factor is persistent (\(\gamma=0.03\)) with volatility
 \(\xi=24\bp\) per \(\sqrt{\text{year}}\): the Euribor--OIS basis wanders slowly around its market
 forward rather than snapping back to it. The fast reversion \(\kappa_f\) lies just above the lower
-bound of its search range (\(1.5\)), where the earlier fits sat.
+bound of its search range (\(1.5\)). Refitting with that bound relaxed to \(0.5\), warm-started from
+the same parameters, moves \(\kappa_f\) to \(1.10\) with the other parameters essentially unchanged
+and no gain in fit (RMSE \(5.92\) against \(5.90\bp\); ATM and liquid core slightly worse, \(2.6\) and
+\(3.1\bp\)): \(\kappa_f\) is only weakly identified between about \(1\) and \(1.6\), and the bound does
+not limit the fit.
 
 \begin{table}[t]
 \centering
@@ -576,9 +580,6 @@ are the natural extension.
 \emph{Near-intrinsic wings.} The short-dated deep-ITM and far-OTM strikes carry almost no vega; their
 inverted volatilities are ill-conditioned, are down-weighted by design, and dominate the
 full-surface RMSE of the RFR markets through the first caplet.
-
-\emph{Parameter bounds.} \(\kappa_f\) calibrates just above the lower bound of its range; relaxing
-that bound is a robustness check still to run.
 
 Planned extensions: (i) calibrating the full surface to \(29.5\)Y (the stripped surface already carries these
 quotes); (ii) replacing the path-set estimate of \(\varphi\) by its exact value from the affine

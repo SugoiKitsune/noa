@@ -56,7 +56,8 @@ liquid-core errors ~18–21 bp for every Gaussian rung vs 2.0 / 2.8 for HWH.
 1. **Swaption out-of-sample validation** — plan written; build on exact Riccati bond prices
    (also gives φ(t) exactly instead of on the path set). SWPM 1Y×5Y ATM = 111.52 bp as a check.
 2. **Short-end ATM undershoot** (EUR 0.5–1Y, GBP 0–1Y, USD 1–3Y) — jumps (Roland rec 1; Andersen–Bang).
-3. **κ_f bound** (1.56 vs bound 1.5) — relax and refit as a robustness check.
+3. ~~κ_f bound~~ **DONE (7 Oct)** — relaxed to 0.5: κ_f → 1.10, RMSE 5.92 vs 5.90, ATM/core
+   slightly worse (2.58/3.08); weakly identified, bound not binding. Headline fit kept.
 4. SONIA cap SWPM check (only SOFR was checked; same convention assumed).
 5. **Euribor curve bootstrap** is single-curve (cash + FRA + swaps); Henrard Ch. 4 / §4.9 calibrates
    the projection curve with €STR discounting. Moves Euribor forwards by a few bp; vol fit
