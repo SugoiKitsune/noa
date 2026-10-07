@@ -131,7 +131,9 @@ prices, Willems~\cite{willems2020} derives effective SABR parameters, and Anders
 Bang~\cite{andersenbang2024} add jumps for SOFR caplets around policy meetings. The common point,
 which our instrument definition (Section~\ref{sec:instrument}) follows, is that a
 backward-looking caplet keeps volatility through its accrual period while a forward-looking one
-(EUR Euribor) does not.
+(EUR Euribor) does not. The two coexist because the transition replaced LIBOR by overnight rates in
+USD and GBP but left Euribor in place~\cite[Sec.~6.1 and 6.3]{henrard2026}, which is why our three
+markets carry two different caplet contracts.
 
 \paragraph{Calibration by simulation.} Calibrating directly through a Monte Carlo pricer, rather
 than through a closed-form or surrogate pricer~\cite{horvath2021}, is also the approach of
@@ -144,7 +146,7 @@ implied-volatility inversion makes the objective non-smooth in the Monte Carlo n
 \subsection{Why two curves}
 Since 2008 the single-curve identity---interbank term rates (Euribor) treated as risk-free and equal
 to OIS---no longer holds: Euribor carries a credit/liquidity premium, while collateralised
-derivatives are discounted at the risk-free overnight rate (€STR). Pricing a EUR cap therefore needs
+derivatives are discounted at the collateral rate, the overnight rate (€STR)~\cite[Ch.~2]{henrard2026}. Pricing a EUR cap therefore needs
 two curves: a \textbf{discount} curve (€STR/OIS) for the collateralised payoff, and a
 \textbf{projection} curve (6M Euribor) for the floating rate it pays on. In the EUR data the two
 differ by \(+9\) to \(+21\bp\) (the Euribor--OIS basis); collapsing them mis-prices every forward by
@@ -252,13 +254,16 @@ r_{\text{proj}}(u)\,\mathrm{d}u\Big\}-1\Big),
 \end{equation}
 accrued over every business day of the period (Section~\ref{sec:calib}). In both markets the
 forward of \(R\) is the simple forward off the projection curve, which is the forward the market
-surface is stripped on.
+surface is stripped on; for the in-arrears rate this holds because, before its period starts, a
+compounded overnight coupon has the same value as a term coupon on the same curve, whatever the
+model~\cite[Sec.~3.8]{henrard2026}.
 
 \paragraph{Pricing and inversion.} Monte Carlo estimators of the discount factor
 \(D=\mathbb{E}[e^{-\int_0^{t_{\text{fix}}+\tau} r_{\text{ois}}}]\), the forward
 \(F=\mathbb{E}[R\,e^{-\int r_{\text{ois}}}]/D\) and the price
 \(\mathrm{pv}=\mathbb{E}[(R-K)^{+}\tau\, e^{-\int r_{\text{ois}}}]\) are computed on the same path
-set, and the price is inverted to a normal (Bachelier) volatility by bisection on \(\sigma\):
+set, and the price is inverted to a normal (Bachelier) volatility~\cite[Sec.~5.1.2]{henrard2026} by
+bisection on \(\sigma\):
 \begin{equation}
 \mathrm{pv} = D\,\tau\Big[(F-K)\,\Phi(d) + \sigma\sqrt{T_{\text{exp}}}\;\phi(d)\Big],
 \qquad d=\frac{F-K}{\sigma\sqrt{T_{\text{exp}}}} .
@@ -273,8 +278,9 @@ matches how the data vendor prices these caps: Bloomberg's swap manager values a
 same volatility cube as a strip of compounded in-arrears caplets, including the live first period,
 in a one-factor Hull--White model, i.e.\ with volatility carried through the accrual period, of
 which \(t_{\text{fix}}+\tau/3\) is the small-mean-reversion limit. The rate conventions (one-day
-lookback, one rate cut-off day, two-day payment delay) shift dates by one or two days, below what
-matters for the volatility.
+lookback, one rate cut-off day, two-day payment delay; see~\cite{henrard2025conv}) shift dates by one
+or two days. We ignore them, as Henrard does for the analogous payment-date mismatch, whose
+convexity effect is negligible~\cite[Sec.~3.7]{henrard2026}.
 
 \section{Market data}
 Three market inputs are fed in, all sourced from Bloomberg:
@@ -285,8 +291,15 @@ Three market inputs are fed in, all sourced from Bloomberg:
   per-period Bachelier volatilities indexed by \((t_{\text{fix}},K)\), with the expiry
   convention of Section~\ref{sec:instrument}.
 \end{itemize}
-For USD and GBP the projection curve is the OIS (SOFR, SONIA) curve itself: the caplets reference
-the overnight rate, so the two curves coincide and only the EUR fit exercises the basis factor. This
+The OIS curves are bootstrapped from OIS par rates and the Euribor curve is represented by
+pseudo-discount factors~\cite[Sec.~3.6 and Ch.~4]{henrard2026}. The Euribor curve is bootstrapped
+from deposit, FRA and swap quotes in single-curve fashion; the fully consistent construction
+discounts those instruments on €STR~\cite[Sec.~4.9]{henrard2026}, a refinement that
+moves the Euribor forwards by a few basis points and that we leave to future work. Because the model
+reprices whichever curves it is given (Section~\ref{sec:calib}), this affects the forwards, not the
+volatility fit. For USD and GBP the projection curve is the OIS (SOFR, SONIA) curve itself: the
+caplets reference the overnight rate, so the two curves coincide and only the EUR fit exercises the
+basis factor. This
 is also the vendor's own set-up: the USD RFR volatility cube uses the SOFR curve both to project
 and to discount, and quotes cap volatilities in normal (Bachelier) terms.
 The calibration set used here is the sub-surface with \(t_{\text{fix}}\le 10\)Y: \(20\) maturities
@@ -312,7 +325,9 @@ that \(D(T)=P^{\text{mkt}}(T)\). For projection, \(\int_{t_{\text{fix}}}^{t_{\te
 so that \(F=\mathbb{E}[R\,e^{-\int r_{\text{ois}}}]/D\) equals the market simple forward. The
 discount shift rescales price and \(D\) alike and leaves implied volatilities unchanged; the
 projection shift places each strike at the right moneyness. On the daily grid the model forwards
-then match the market to within \(0.2\bp\) at every maturity.
+then match the market to within \(0.2\bp\) at every maturity. In an HJM formulation the initial
+curve is matched by construction~\cite{hjm1992}~\cite[App.~B]{henrard2026}; the shift \(\varphi\) is
+what restores that property for a short-rate model.
 
 \paragraph{Time step and the accrual window.} The in-arrears payoff compounds the rate over the
 accrual period \([T,T+\tau]\), and in discrete time that integral is taken over
@@ -573,7 +588,8 @@ swaptions---which do not enter the calibration---with the calibrated parameters.
 \emph{correlation} between forward rates that a caplet surface only partly constrains, this is the
 most informative remaining test; it requires bond reconstruction at the option expiry under
 stochastic volatility (a conditional-Gaussian or nested-MC pricer), and is left as the natural next
-step.
+step. In the Gaussian limit \(\varepsilon\to0\) the exact multi-curve swaption price of
+Henrard~\cite[Thm.~5.3]{henrard2026} gives an independent check of that pricer.
 
 \clearpage
 \appendix
@@ -726,6 +742,9 @@ in the quadratic branch, approximate in the exponential).
 \bibitem{backwell2025} A.~Backwell, A.~Macrina, E.~Schl\"{o}gl, and D.~Skovmand.
   Lost in the LIBOR transition.
   \emph{Quantitative Finance}, 25(1):17--30, 2025. \doi{10.1080/14697688.2024.2436651}
+\bibitem{henrard2025conv} M.~Henrard.
+  Interest rate instruments and market conventions guide---Post LIBOR edition.
+  Market infrastructure series, muRisQ and OpenGamma, 2025. \url{https://ssrn.com/abstract=5099269}
 \bibitem{henrard2026} M.~Henrard.
   \emph{Interest Rate Modelling in the Multi-Curve Framework: Foundations, Evolution, Transition,
   and Implementation}, 2nd edition. Applied Quantitative Finance, Palgrave Macmillan, 2026.

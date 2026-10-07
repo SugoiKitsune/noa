@@ -48,7 +48,9 @@ liquid-core errors ~18–21 bp for every Gaussian rung vs 2.0 / 2.8 for HWH.
 - Nested-model ladder (rec 2) + bucketed/relative metrics (rec 4).
 - Cross-market EUR/USD/GBP (one parameter set per market), all on the daily grid.
 - Literature pass: Related-literature section, 53 verified references with DOIs, response to
-  Henrard §5.3 ("short-rate models on forward curves"), naming clash with equity HHW flagged.
+  Henrard §5.3 ("short-rate models on forward curves"), naming clash with equity HHW flagged;
+  Henrard 2nd ed. now cited by section throughout (Ch. 2, 3.6–3.8, 4, 5.1.2, 5.3, 5.5, 6.1/6.3,
+  7.12, App. B, Thm 5.3) plus his post-LIBOR conventions guide.
 
 ## Open items (priority order)
 1. **Swaption out-of-sample validation** — plan written; build on exact Riccati bond prices
@@ -56,3 +58,6 @@ liquid-core errors ~18–21 bp for every Gaussian rung vs 2.0 / 2.8 for HWH.
 2. **Short-end ATM undershoot** (EUR 0.5–1Y, GBP 0–1Y, USD 1–3Y) — jumps (Roland rec 1; Andersen–Bang).
 3. **κ_f bound** (1.56 vs bound 1.5) — relax and refit as a robustness check.
 4. SONIA cap SWPM check (only SOFR was checked; same convention assumed).
+5. **Euribor curve bootstrap** is single-curve (cash + FRA + swaps); Henrard Ch. 4 / §4.9 calibrates
+   the projection curve with €STR discounting. Moves Euribor forwards by a few bp; vol fit
+   unaffected (the curve shift reprices whatever curve is given). Stated in the paper's data section.
