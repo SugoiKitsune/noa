@@ -265,9 +265,12 @@ def calibrate(ccy, model, device, *, max_iter, n_paths, T_max=None, dt=1/52, max
     return {"model": label, "rmse_bp": round(rmse, 1), "loss": round(best_loss, 4)}
 
 
-def make_dm_space(device, vol_lo_bp=20.0, vol_hi_bp=400.0, eps0=0.15):
+def make_dm_space(device, vol_lo_bp=20.0, vol_hi_bp=400.0, eps0=0.15, kf_lo=None):
     """v35 param structure but with DM-appropriate theta/v0 bounds. The RU floor
-    THETA_MIN=1e-3 => min normal vol ~316bp, far above DM vols (~20-300bp)."""
+    THETA_MIN=1e-3 => min normal vol ~316bp, far above DM vols (~20-300bp).
+    kf_lo overrides the kappa_fast lower bound (default 1.5) for robustness runs; the
+    0-1 vector is scaled by the bounds, so a checkpoint must be decoded with the same
+    kf_lo it was fitted with (dm_calibrate_batched stores it)."""
     base = make_param_space(device, version="v35")
     lb = base["lb"].clone(); ub = base["ub"].clone()
     th_lo = (vol_lo_bp / 1e4) ** 2; th_hi = (vol_hi_bp / 1e4) ** 2
@@ -275,6 +278,8 @@ def make_dm_space(device, vol_lo_bp=20.0, vol_hi_bp=400.0, eps0=0.15):
         lb[i] = th_lo; ub[i] = th_hi
     lb[19] = 0.08; ub[19] = 0.50                         # eps in [0.08,0.5]: convexity, avoid high-eps CUDA stall
     lb[23] = lb[24] = lb[25] = 0.0                       # rho >= 0: caps show a right (payer) skew
+    if kf_lo is not None:
+        lb[16] = float(kf_lo)
     rng = ub - lb
     nt = 8
 

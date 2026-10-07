@@ -53,12 +53,13 @@ def main():
     payoff = ck.get("payoff", "arrears_avg")
     surface = ck.get("surface", "vol_surface.csv")
     fit_curve = bool(ck.get("fit_curve", False))
+    kf_lo = ck.get("kf_lo")
     dt, max_mat = float(ck["dt"]), ck.get("max_mat", 10.0)
     print(f"{a.ccy}/{a.tag}: dt={dt:.6f} payoff={payoff} surface={surface} "
           f"fit_curve={fit_curve} paths={a.paths} seeds={a.seeds}", flush=True)
 
     obj = B.build_objective(a.ccy, dev, model=a.model, dt=dt, max_mat=max_mat, payoff=payoff,
-                            surface=surface,
+                            surface=surface, kf_lo=kf_lo,
                             fit_curve=fit_curve)
     c = obj["caplets"]
     mkt = obj["mkt"].cpu().numpy()

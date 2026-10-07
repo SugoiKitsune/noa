@@ -53,7 +53,7 @@ AUTO_PAYOFF = {"eur": "term", "usd": "arrears_comp", "gbp": "arrears_comp"}
 
 
 def build_objective(ccy, device, *, model="HWH", dt=0.02, max_mat=None, short_wt=1.5,
-                    payoff="arrears_avg", surface="vol_surface.csv", fit_curve=False):
+                    payoff="arrears_avg", surface="vol_surface.csv", fit_curve=False, kf_lo=None):
     """Market tensors + a batched loss. The vega weighting mirrors
     dm_calibrate.make_eval_loss exactly; the gate checks the two agree."""
     tau = TENOR[ccy]
@@ -92,7 +92,7 @@ def build_objective(ccy, device, *, model="HWH", dt=0.02, max_mat=None, short_wt
     wt = torch.tensor(_w, dtype=torch.float32, device=device) * torch.where(t_fix < 1.0, short_wt, 1.0)
     wt = wt / wt.mean()
 
-    space = make_dm_space(device)
+    space = make_dm_space(device, kf_lo=kf_lo)
     nodes, rho_nodes = space["theta_nodes"], space["rho_nodes_t"]
     unpack = space["unpack"]
 
@@ -192,14 +192,21 @@ def adam_spsa_batched(eval_batch, p_init, *, n_params, max_iter=800, n_paths=163
 
 # ----------------------------------------------------------------- driver
 def calibrate(ccy, model, device, *, max_iter, n_paths, dt, max_mat, batch, tag,
-              payoff="arrears_avg", surface="vol_surface.csv", init=None, fit_curve=False):
+              payoff="arrears_avg", surface="vol_surface.csv", init=None, fit_curve=False,
+              kf_lo=None):
     obj = build_objective(ccy, device, model=model, dt=dt, max_mat=max_mat,
-                          payoff=payoff, surface=surface, fit_curve=fit_curve)
+                          payoff=payoff, surface=surface, fit_curve=fit_curve, kf_lo=kf_lo)
     space, mkt = obj["space"], obj["mkt"]
     label = f"{model}_{tag}"
     if init:
-        p0 = torch.load(init, map_location=device)["p"].to(device)
-        print(f"  warm start from {os.path.basename(init)}", flush=True)
+        ck0 = torch.load(init, map_location=device)
+        p0 = ck0["p"].to(device)
+        src = make_dm_space(device, kf_lo=ck0.get("kf_lo"))
+        if ck0.get("kf_lo") != kf_lo:                    # re-map to the new bounds: same raw params
+            raw = src["lb"] + p0 * src["param_range"]
+            p0 = torch.clamp((raw - space["lb"]) / space["param_range"], 0, 1)
+        print(f"  warm start from {os.path.basename(init)}"
+              + (f"  (kappa_f lower bound {kf_lo})" if kf_lo is not None else ""), flush=True)
     else:
         p0 = space["smart_init"](mkt / 1e4,
                                  torch.tensor(obj["caplets"].t_fix.values, device=device))
@@ -221,6 +228,7 @@ def calibrate(ccy, model, device, *, max_iter, n_paths, dt, max_mat, batch, tag,
                 "sim": "stream_batched", "ccy": ccy, "dt": dt, "max_mat": max_mat,
                 "n_paths": n_paths, "iters": max_iter, "history": hist,
                 "payoff": obj["payoff"], "surface": surface, "init": init, "fit_curve": fit_curve,
+                "kf_lo": kf_lo,
                 "final_paths": final_paths, "final_seed": 7}, out)
     res = obj["caplets"][["t_fix", "strike"]].copy()
     res["market_vol_bp"] = mkt.detach().cpu().numpy()
@@ -249,6 +257,8 @@ def main():
     ap.add_argument("--surface", default="vol_surface.csv",
                     help="stripped target in data/<ccy>/ (e.g. vol_surface_lm.csv)")
     ap.add_argument("--init", default=None, help="checkpoint .pt to warm-start from")
+    ap.add_argument("--kf_lo", type=float, default=None,
+                    help="override the kappa_fast lower bound (default 1.5)")
     ap.add_argument("--fit_curve", action="store_true",
                     help="deterministic shift so the model reprices the initial curves")
     args = ap.parse_args()
@@ -258,7 +268,7 @@ def main():
     r = calibrate(args.ccy, args.model, device, max_iter=args.iters, n_paths=args.paths,
                   dt=args.dt, max_mat=args.max_mat, batch=args.batch, tag=tag,
                   payoff=args.payoff, surface=args.surface, init=args.init,
-                  fit_curve=args.fit_curve)
+                  fit_curve=args.fit_curve, kf_lo=args.kf_lo)
     with open(os.path.join(RUNS, f"batched_{args.ccy}_{tag}.json"), "w") as f:
         json.dump(r, f, indent=2)
     print(json.dumps(r, indent=2))
