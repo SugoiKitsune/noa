@@ -68,7 +68,7 @@ data are fed in, and \emph{how well} the joint calibration reproduces the full s
 shared factor and a basis factor), so the smile is priced consistently across both curves.
 (ii) A \emph{lifted} stochastic variance---a two-factor CIR mixture that is a low-order Markovian
 lift, in the sense of Abi~Jaber and El~Euch~\cite{abijaber2019multi} and
-Cuchiero and Teichmann~\cite{cuchiero2019}, of a rough/multi-scale volatility---kept affine and
+Cuchiero and Teichmann~\cite{cuchiero2019}, of a rough/multi-scale volatility---built from affine (CIR) factors and
 directly simulable. (iii) A \emph{large-scale joint calibration}: one \(27\)-parameter vector fit to
 the entire caplet surface by GPU Monte Carlo and a gradient-free Adam--SPSA
 optimiser~\cite{spall1998,kingma2015}. (iv) The Andersen QE scheme~\cite{andersen2008} for the
@@ -92,6 +92,16 @@ smile~\cite{hagan2002}, which fit slice by slice; a short-rate model fits the wh
 parameter vector and gives every discount factor at every date, which is what Monte Carlo pricing of
 in-arrears payoffs needs.
 
+\paragraph{Affine term-structure models.} Affine short-rate models go back to Duffie and
+Kan~\cite{duffiekan1996}; Duffie, Filipovi\'{c} and Schachermayer~\cite{dfs2003} characterise affine
+processes on the canonical state space \(\mathbb{R}_+^m\times\mathbb{R}^n\), Duffie, Pan and
+Singleton~\cite{duffie2000} give the transform analysis that makes them tractable, and Dai and
+Singleton~\cite{daisingleton2000} classify the admissible term-structure specifications. Cuchiero,
+Filipovi\'{c}, Mayerhofer and Teichmann~\cite{cfmt2011} extend affine processes to positive
+semidefinite matrices, the setting of the Markovian lifts below. Our state \((x,V_1,V_2)\) lives on
+\(\mathbb{R}\times\mathbb{R}_+^2\) and is affine apart from one term: the leverage covariance
+\(\rho\,\varepsilon\sqrt{V V_1}\) is not linear in the state unless \(w=1\).
+
 \paragraph{Lifted volatility.} Volatility is rough~\cite{gatheral2018}, and its finite-dimensional
 Markovian lifts~\cite{abijaber2019multi,abijaber2019lifting,cuchiero2019} replace the fractional
 kernel by a weighted sum of mean-reverting factors; our two-factor CIR mixture is the lowest-order
@@ -100,13 +110,21 @@ such lift, applied to a rate rather than an equity variance.
 \paragraph{Multi-curve models and backward-looking rates.} The separation of discounting from forward
 estimation became standard after 2008~\cite{bianchetti2010,mercurio2010,henrard2026}. Models with a
 stochastic basis include Mercurio and Xie~\cite{mercurioxie2012} and the affine LIBOR models of Grbac
-et al.~\cite{grbac2015affine}; Cuchiero, Fontana and Gnoatto~\cite{cfg2019} classify the affine
-specifications, and our Hull--White basis factor is the simplest member of that class. Since the
+et al.~\cite{grbac2015affine}. Cuchiero, Fontana and Gnoatto set out a general HJM framework for
+multiple curves~\cite{fontana2016hjm} and classify its affine specifications~\cite{cfg2019}, and our
+Hull--White basis factor is the simplest member of that class; Fontana, Gnoatto and
+Szulda~\cite{fontana2021cbi} drive the spreads by self-exciting CBI processes, Fontana, Lanaro and
+Murgoci~\cite{fontana2025geometry} characterise which multi-curve HJM models admit
+finite-dimensional factor realisations, and Fontana, Pavarana and Runggaldier~\cite{fontana2023rollover}
+give the Euribor--OIS basis an economic reading as roll-over risk. Since the
 LIBOR transition, USD and GBP caps pay a compounded overnight rate that is known only at the end of
 the accrual period, while EUR caps still reference the forward-looking Euribor. Lyashenko and
 Mercurio~\cite{lyashenko2019} extended the market model to such in-arrears rates,
-Turfus~\cite{turfus2022} prices them in Hull--White, and Andersen and Bang~\cite{andersenbang2024} add
-jumps for SOFR caplets. The common point, which our instrument definition
+Turfus~\cite{turfus2022} prices them in Hull--White, and Fontana~\cite{fontana2023caplet} prices them
+in general affine short-rate models---the setting closest to ours. Overnight rates jump at policy
+dates: Fontana, Grbac, G\"umbel and Schmidt~\cite{fontana2020disc} and Fontana, Grbac and
+Schmidt~\cite{fontana2024overnight} build term-structure models with such stochastic discontinuities,
+and Andersen and Bang~\cite{andersenbang2024} apply jumps to SOFR caplets. The common point, which our instrument definition
 (Section~\ref{sec:instrument}) follows, is that a backward-looking caplet keeps volatility through
 its accrual period and a forward-looking one does not.
 
@@ -543,7 +561,7 @@ the liquid-core error. The remaining residuals are these.
 \(0.5\)Y and \(52\) against \(78\bp\) at \(1\)Y; USD is closer (\(70\) against \(74\bp\) at
 \(0.5\)Y). Part of this is in the data---the EUR \(1\)Y point sits above the \(1.5\)Y point, and the
 stripped surface is piecewise flat between cap maturities---but a diffusion with mean-reverting
-variance also struggles to build a short-dated hump. Jumps around policy dates~\cite{andersenbang2024}
+variance also struggles to build a short-dated hump. Jumps around policy dates~\cite{fontana2020disc,fontana2024overnight,andersenbang2024}
 are the natural extension.
 
 \emph{Near-intrinsic wings.} The short-dated deep-ITM and far-OTM strikes carry almost no vega; their
@@ -634,6 +652,18 @@ in the quadratic branch, approximate in the exponential).
 \bibitem{filipovic2009} D.~Filipovi\'{c}.
   \emph{Term-Structure Models: A Graduate Course}. Springer Finance, Springer, 2009.
   \doi{10.1007/978-3-540-68015-4}
+\bibitem{duffiekan1996} D.~Duffie and R.~Kan.
+  A yield-factor model of interest rates.
+  \emph{Mathematical Finance}, 6(4):379--406, 1996. \doi{10.1111/j.1467-9965.1996.tb00123.x}
+\bibitem{daisingleton2000} Q.~Dai and K.~J.~Singleton.
+  Specification analysis of affine term structure models.
+  \emph{Journal of Finance}, 55(5):1943--1978, 2000. \doi{10.1111/0022-1082.00278}
+\bibitem{dfs2003} D.~Duffie, D.~Filipovi\'{c}, and W.~Schachermayer.
+  Affine processes and applications in finance.
+  \emph{Annals of Applied Probability}, 13(3):984--1053, 2003. \doi{10.1214/aoap/1060202833}
+\bibitem{cfmt2011} C.~Cuchiero, D.~Filipovi\'{c}, E.~Mayerhofer, and J.~Teichmann.
+  Affine processes on positive semidefinite matrices.
+  \emph{Annals of Applied Probability}, 21(2):397--463, 2011. \doi{10.1214/10-AAP710}
 \bibitem{longstaffschwartz1992} F.~A.~Longstaff and E.~S.~Schwartz.
   Interest rate volatility and the term structure: a two-factor general equilibrium model.
   \emph{Journal of Finance}, 47(4):1259--1282, 1992. \doi{10.1111/j.1540-6261.1992.tb04657.x}
@@ -673,9 +703,27 @@ in the quadratic branch, approximate in the exponential).
 \bibitem{grbac2015affine} Z.~Grbac, A.~Papapantoleon, J.~Schoenmakers, and D.~Skovmand.
   Affine LIBOR models with multiple curves: theory, examples and calibration.
   \emph{SIAM Journal on Financial Mathematics}, 6(1):984--1025, 2015. \doi{10.1137/15M1011731}
+\bibitem{fontana2016hjm} C.~Cuchiero, C.~Fontana, and A.~Gnoatto.
+  A general {HJM} framework for multiple yield curve modelling.
+  \emph{Finance and Stochastics}, 20(2):267--320, 2016. \doi{10.1007/s00780-016-0291-5}
 \bibitem{cfg2019} C.~Cuchiero, C.~Fontana, and A.~Gnoatto.
   Affine multiple yield curve models.
   \emph{Mathematical Finance}, 29(2):568--611, 2019. \doi{10.1111/mafi.12183}
+\bibitem{fontana2020disc} C.~Fontana, Z.~Grbac, S.~G\"umbel, and T.~Schmidt.
+  Term structure modelling for multiple curves with stochastic discontinuities.
+  \emph{Finance and Stochastics}, 24(2):465--511, 2020. \doi{10.1007/s00780-020-00416-5}
+\bibitem{fontana2021cbi} C.~Fontana, A.~Gnoatto, and G.~Szulda.
+  Multiple yield curve modelling with {CBI} processes.
+  \emph{Mathematics and Financial Economics}, 15(3):579--610, 2021. \doi{10.1007/s11579-020-00289-4}
+\bibitem{fontana2023rollover} C.~Fontana, S.~Pavarana, and W.~J.~Runggaldier.
+  A stochastic control perspective on term structure models with roll-over risk.
+  \emph{Finance and Stochastics}, 27(4):903--932, 2023. \doi{10.1007/s00780-023-00515-z}
+\bibitem{fontana2024overnight} C.~Fontana, Z.~Grbac, and T.~Schmidt.
+  Term structure modeling with overnight rates beyond stochastic continuity.
+  \emph{Mathematical Finance}, 34(1):151--189, 2024. \doi{10.1111/mafi.12415}
+\bibitem{fontana2025geometry} C.~Fontana, G.~Lanaro, and A.~Murgoci.
+  The geometry of multi-curve interest rate models.
+  \emph{Quantitative Finance}, 25(2):323--342, 2025. \doi{10.1080/14697688.2024.2409276}
 \bibitem{henrard2026} M.~Henrard.
   \emph{Interest Rate Modelling in the Multi-Curve Framework: Foundations, Evolution, Transition,
   and Implementation}, 2nd edition. Applied Quantitative Finance, Palgrave Macmillan, 2026.
@@ -683,6 +731,9 @@ in the quadratic branch, approximate in the exponential).
 \bibitem{lyashenko2019} A.~Lyashenko and F.~Mercurio.
   Looking forward to backward-looking rates: a modeling framework for term rates replacing LIBOR.
   SSRN Working Paper 3330240, 2019. \doi{10.2139/ssrn.3330240}
+\bibitem{fontana2023caplet} C.~Fontana.
+  Caplet pricing in affine models for alternative risk-free rates.
+  \emph{SIAM Journal on Financial Mathematics}, 14(1):SC1--SC16, 2023. \doi{10.1137/22M1513691}
 \bibitem{turfus2022} C.~Turfus.
   Caplet pricing with backward-looking rates.
   \emph{Wilmott}, 2022(121), 2022. \doi{10.54946/wilm.11057}

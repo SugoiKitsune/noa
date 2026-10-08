@@ -1,6 +1,6 @@
 # Progress summary — EUR/USD/GBP caplet calibration (for review / Roland)
 
-*Branch `ap_calib` on the fork (SugoiKitsune/noa). Paper: `article/dm_writeup.tex` (→ 14-page PDF, 35 references).
+*Branch `ap_calib` on the fork (SugoiKitsune/noa). Paper: `article/dm_writeup.tex` (→ 15-page PDF, 46 references).
 Model/data reference: `MODEL_SPEC.md`. Swaption plan: `article/SWAPTION_OOS_PLAN.md`.
 Last updated 8 Oct 2026.*
 
@@ -47,7 +47,7 @@ liquid-core errors ~18–21 bp for every Gaussian rung vs 2.0 / 2.8 for HWH.
 - Andersen QE (fixed Euler short-end bias: 0.5Y 106→40 bp); vega-weighted objective (ATM 8→3 bp).
 - Nested-model ladder (rec 2) + bucketed/relative metrics (rec 4).
 - Cross-market EUR/USD/GBP (one parameter set per market), all on the daily grid.
-- Literature pass: compact Related-literature section, 35 verified references with DOIs (all original references kept; trimmed
+- Literature pass: compact Related-literature section, 46 verified references with DOIs (all original references kept, plus Fontana et al. and the affine-process literature; trimmed
   from 54 on 8 Oct), response to Henrard §5.3 ("short-rate models on forward curves"), naming
   clash with equity HHW flagged; Henrard 2nd ed. cited 4 times (framework, §5.3, in-arrears
   caplets, Euribor bootstrap §4.9).
