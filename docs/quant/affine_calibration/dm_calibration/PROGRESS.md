@@ -1,6 +1,6 @@
 # Progress summary — EUR/USD/GBP caplet calibration (for review / Roland)
 
-*Branch `ap_calib` on the fork (SugoiKitsune/noa). Paper: `article/dm_writeup.tex` (→ 16-page PDF, 54 references).
+*Branch `ap_calib` on the fork (SugoiKitsune/noa). Paper: `article/dm_writeup.tex` (→ 14-page PDF, 30 references).
 Model/data reference: `MODEL_SPEC.md`. Swaption plan: `article/SWAPTION_OOS_PLAN.md`.
 Last updated 8 Oct 2026.*
 
@@ -47,10 +47,10 @@ liquid-core errors ~18–21 bp for every Gaussian rung vs 2.0 / 2.8 for HWH.
 - Andersen QE (fixed Euler short-end bias: 0.5Y 106→40 bp); vega-weighted objective (ATM 8→3 bp).
 - Nested-model ladder (rec 2) + bucketed/relative metrics (rec 4).
 - Cross-market EUR/USD/GBP (one parameter set per market), all on the daily grid.
-- Literature pass: Related-literature section, 53 verified references with DOIs, response to
-  Henrard §5.3 ("short-rate models on forward curves"), naming clash with equity HHW flagged;
-  Henrard 2nd ed. now cited by section throughout (Ch. 2, 3.6–3.8, 4, 5.1.2, 5.3, 5.5, 6.1/6.3,
-  7.12, App. B, Thm 5.3) plus his post-LIBOR conventions guide.
+- Literature pass: compact Related-literature section, 30 verified references with DOIs (trimmed
+  from 54 on 8 Oct), response to Henrard §5.3 ("short-rate models on forward curves"), naming
+  clash with equity HHW flagged; Henrard 2nd ed. cited 4 times (framework, §5.3, in-arrears
+  caplets, Euribor bootstrap §4.9).
 
 ## Open items (priority order)
 1. **Swaption out-of-sample validation** — plan written; bond prices at expiry from Riccati ODEs.
