@@ -53,7 +53,7 @@ caplet/cap calibration; normal (Bachelier) implied volatility; Monte Carlo; SPSA
 \section{Motivation}
 EUR caplet surfaces exhibit a pronounced, maturity-dependent smile: a
 convex ``payer'' wing at high strikes and a steep short-maturity slope that flattens with maturity.
-Any Gaussian short-rate model~\cite{vasicek1977,hullwhite1990,brigo2006} (one- or multi-factor
+Any Gaussian short-rate model~\cite{vasicek1977,hullwhite1990,brigo2006,filipovic2009} (one- or multi-factor
 Hull--White with a deterministic volatility term structure) produces a \emph{strike-flat}
 normal-volatility smile and therefore cannot, by construction, reproduce this curvature. Introducing
 an affine stochastic variance~\cite{cir1985,heston1993,duffie2000} for the driving
@@ -120,8 +120,8 @@ two curves: a \textbf{discount} curve (€STR/OIS) for the collateralised payoff
 \textbf{projection} curve (6M Euribor) for the floating rate it pays on. In the EUR data the two
 differ by \(+9\) to \(+21\bp\) (the Euribor--OIS basis); collapsing them mis-prices every forward by
 that amount---an order of magnitude above our few-bp fit target. This is the multi-curve framework
-of Bianchetti~\cite{bianchetti2010}, Mercurio~\cite{mercurio2010} and
-Henrard~\cite{henrard2026}.
+of Bianchetti~\cite{bianchetti2010}, Mercurio~\cite{mercurio2010}, Henrard~\cite{henrard2026}
+and others~\cite{grbac2015}.
 Affine specifications of that framework are classified by Cuchiero, Fontana and
 Gnoatto~\cite{cfg2019}, and the state process below sits inside their affine multiple-yield-curve
 class; our contribution is to pair that structure with a lifted-CIR stochastic variance and to
@@ -160,7 +160,7 @@ mixture of two Cox--Ingersoll--Ross variances with a fast and a slow mean-revers
 (\(\kappa_1\equiv\kappa_f\), \(\kappa_2\equiv\kappa_s\)); this two-timescale construction is what
 lets a single parameter set bend across maturities. Such a multi-factor CIR mixture is precisely a
 low-order \emph{Markovian lift}: a finite-dimensional, affine, simulable process whose weighted sum
-approximates a rough (or multi-scale) variance~\cite{gatheral2018,abijaber2019multi,abijaber2019lifting,cuchiero2019}.
+approximates a rough (or multi-scale) variance~\cite{gatheral2018,eleuch2019,abijaber2019multi,abijaber2019lifting,abijaber2019volterra,cuchiero2019}.
 Truncating to two factors keeps the model tractable for large-scale Monte Carlo calibration while
 retaining the two-timescale flexibility that a single CIR factor lacks. The Heston vol-of-vol
 \(\varepsilon\) generates smile \emph{curvature}, and a term structure of leverage correlations
@@ -280,7 +280,7 @@ caplets, fitted \emph{jointly} with one parameter vector.
 \paragraph{Simulation.} Paths are generated on a GPU with an \(O(N)\)-memory Monte Carlo (running
 integrals, never materialising the full path matrix for the pricing sums). The CIR variance
 factors are sampled with the Andersen (2008) quadratic-exponential (QE)
-scheme~\cite{andersen2008}. In the low-vol
+scheme~\cite{andersen2008,broadie2006}. In the low-vol
 regime the CIR is strongly Feller-violated (\(2\kappa\theta\ll\varepsilon^2\)); an Euler scheme
 with reflection biases the variance upward---most severely at short maturities, where it inflated
 the \(0.5\)Y ATM volatility from a market level of \(44\bp\) to over \(100\bp\)---whereas QE is
@@ -607,6 +607,12 @@ in the quadratic branch, approximate in the exponential).
 \bibitem{gatheral2018} J.~Gatheral, T.~Jaisson, and M.~Rosenbaum.
   Volatility is rough.
   \emph{Quantitative Finance}, 18(6):933--949, 2018. \doi{10.1080/14697688.2017.1393551}
+\bibitem{eleuch2019} O.~El~Euch and M.~Rosenbaum.
+  The characteristic function of rough Heston models.
+  \emph{Mathematical Finance}, 29(1):3--38, 2019. \doi{10.1111/mafi.12173}
+\bibitem{abijaber2019volterra} E.~Abi~Jaber, M.~Larsson, and S.~Pulido.
+  Affine Volterra processes.
+  \emph{Annals of Applied Probability}, 29(5):3155--3200, 2019. \doi{10.1214/19-AAP1477}
 \bibitem{vasicek1977} O.~Vasicek.
   An equilibrium characterization of the term structure.
   \emph{Journal of Financial Economics}, 5(2):177--188, 1977. \doi{10.1016/0304-405X(77)90016-2}
@@ -625,6 +631,9 @@ in the quadratic branch, approximate in the exponential).
 \bibitem{brigo2006} D.~Brigo and F.~Mercurio.
   \emph{Interest Rate Models---Theory and Practice: With Smile, Inflation and Credit}, 2nd edition.
   Springer Finance, Springer, 2006. \doi{10.1007/978-3-540-34604-3}
+\bibitem{filipovic2009} D.~Filipovi\'{c}.
+  \emph{Term-Structure Models: A Graduate Course}. Springer Finance, Springer, 2009.
+  \doi{10.1007/978-3-540-68015-4}
 \bibitem{longstaffschwartz1992} F.~A.~Longstaff and E.~S.~Schwartz.
   Interest rate volatility and the term structure: a two-factor general equilibrium model.
   \emph{Journal of Finance}, 47(4):1259--1282, 1992. \doi{10.1111/j.1540-6261.1992.tb04657.x}
@@ -658,6 +667,9 @@ in the quadratic branch, approximate in the exponential).
 \bibitem{mercurioxie2012} F.~Mercurio and Z.~Xie.
   The basis goes stochastic.
   \emph{Risk}, 25(12):78--83, 2012.
+\bibitem{grbac2015} Z.~Grbac and W.~J.~Runggaldier.
+  \emph{Interest Rate Modeling: Post-Crisis Challenges and Approaches}.
+  SpringerBriefs in Quantitative Finance, Springer, 2015. \doi{10.1007/978-3-319-25385-5}
 \bibitem{grbac2015affine} Z.~Grbac, A.~Papapantoleon, J.~Schoenmakers, and D.~Skovmand.
   Affine LIBOR models with multiple curves: theory, examples and calibration.
   \emph{SIAM Journal on Financial Mathematics}, 6(1):984--1025, 2015. \doi{10.1137/15M1011731}
@@ -677,6 +689,9 @@ in the quadratic branch, approximate in the exponential).
 \bibitem{andersenbang2024} L.~Andersen and D.~Bang.
   Spike and hike modeling for interest rate derivatives: with an application to SOFR caplets.
   \emph{Quantitative Finance}, 24(8):1017--1033, 2024. \doi{10.1080/14697688.2024.2364800}
+\bibitem{broadie2006} M.~Broadie and \"{O}.~Kaya.
+  Exact simulation of stochastic volatility and other affine jump diffusion processes.
+  \emph{Operations Research}, 54(2):217--231, 2006. \doi{10.1287/opre.1050.0247}
 \bibitem{andersen2008} L.~B.~G.~Andersen.
   Simple and efficient simulation of the Heston stochastic volatility model.
   \emph{Journal of Computational Finance}, 11(3):1--42, 2008. \doi{10.21314/JCF.2008.189}
