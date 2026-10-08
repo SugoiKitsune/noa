@@ -583,8 +583,11 @@ inverted volatilities are ill-conditioned, are down-weighted by design, and domi
 full-surface RMSE of the RFR markets through the first caplet.
 
 Planned extensions: (i) calibrating the full surface to \(29.5\)Y (the stripped surface already carries these
-quotes); (ii) replacing the path-set estimate of \(\varphi\) by its exact value from the affine
-(Riccati) bond-price equations of the model, which the next item needs anyway; and (iii) an
+quotes); (ii) semi-analytic bond prices from Riccati equations, which would give \(\varphi\) without
+simulation and which the next item needs anyway---the model is affine except for the leverage
+term, whose covariance \(\rho\,\varepsilon\sqrt{V V_1}\) is not linear in the state unless \(w=1\),
+so that term needs an approximation (e.g.\ linearising the degree-one homogeneous
+\(\sqrt{V V_1}\) at the long-run variance ratio) checked against simulation; and (iii) an
 out-of-sample check by repricing ATM
 swaptions---which do not enter the calibration---with the calibrated parameters. Because a swaption probes the
 \emph{correlation} between forward rates that a caplet surface only partly constrains, this is the

@@ -53,8 +53,10 @@ liquid-core errors ~18–21 bp for every Gaussian rung vs 2.0 / 2.8 for HWH.
   7.12, App. B, Thm 5.3) plus his post-LIBOR conventions guide.
 
 ## Open items (priority order)
-1. **Swaption out-of-sample validation** — plan written; build on exact Riccati bond prices
-   (also gives φ(t) exactly instead of on the path set). SWPM 1Y×5Y ATM = 111.52 bp as a check.
+1. **Swaption out-of-sample validation** — plan written; bond prices at expiry from Riccati ODEs.
+   NB the model is affine only up to the leverage term: cov(dx, dV1) = ρ ε √(V V1) with
+   V = wV1 + (1−w)V2 is not linear in the state unless w=1, so that term must be approximated
+   (homogeneous linearisation at θ2/θ1) and validated against nested MC. SWPM 1Y×5Y ATM = 111.52 bp.
 2. **Short-end ATM undershoot** (EUR 0.5–1Y, GBP 0–1Y, USD 1–3Y) — jumps (Roland rec 1; Andersen–Bang).
 3. ~~κ_f bound~~ **DONE (7 Oct)** — relaxed to 0.5: κ_f → 1.10, RMSE 5.92 vs 5.90, ATM/core
    slightly worse (2.58/3.08); weakly identified, bound not binding. Headline fit kept.
