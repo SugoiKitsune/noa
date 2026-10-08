@@ -1,8 +1,8 @@
 # Progress summary — EUR/USD/GBP caplet calibration (for review / Roland)
 
-*Branch `ap_calib` on the fork (SugoiKitsune/noa). Paper: `article/dm_writeup.tex` (→ 15-page PDF).
+*Branch `ap_calib` on the fork (SugoiKitsune/noa). Paper: `article/dm_writeup.tex` (→ 16-page PDF, 54 references).
 Model/data reference: `MODEL_SPEC.md`. Swaption plan: `article/SWAPTION_OOS_PLAN.md`.
-Last updated 5 Oct 2026.*
+Last updated 8 Oct 2026.*
 
 ## Model
 Two-factor **lifted-CIR Hull–White–Heston**, genuinely **multi-curve** (OIS/€STR discount + 6M
@@ -58,7 +58,8 @@ liquid-core errors ~18–21 bp for every Gaussian rung vs 2.0 / 2.8 for HWH.
 2. **Short-end ATM undershoot** (EUR 0.5–1Y, GBP 0–1Y, USD 1–3Y) — jumps (Roland rec 1; Andersen–Bang).
 3. ~~κ_f bound~~ **DONE (7 Oct)** — relaxed to 0.5: κ_f → 1.10, RMSE 5.92 vs 5.90, ATM/core
    slightly worse (2.58/3.08); weakly identified, bound not binding. Headline fit kept.
-4. SONIA cap SWPM check (only SOFR was checked; same convention assumed).
+4. SONIA cap SWPM check — no SONIA cap deal found in SWPM (8 Oct); paper states SOFR was
+   verified and SONIA follows the same in-arrears convention.
 5. **Euribor curve bootstrap** is single-curve (cash + FRA + swaps); Henrard Ch. 4 / §4.9 calibrates
    the projection curve with €STR discounting. Moves Euribor forwards by a few bp; vol fit
    unaffected (the curve shift reprices whatever curve is given). Stated in the paper's data section.

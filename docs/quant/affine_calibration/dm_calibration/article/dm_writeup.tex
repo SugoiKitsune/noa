@@ -277,7 +277,8 @@ inverted with the same \(T_{\text{exp}}\), so they are compared on a common foot
 matches how the data vendor prices these caps: Bloomberg's swap manager values a SOFR cap off the
 same volatility cube as a strip of compounded in-arrears caplets, including the live first period,
 in a one-factor Hull--White model, i.e.\ with volatility carried through the accrual period, of
-which \(t_{\text{fix}}+\tau/3\) is the small-mean-reversion limit. The rate conventions (one-day
+which \(t_{\text{fix}}+\tau/3\) is the small-mean-reversion limit. We verified this treatment for SOFR; SONIA
+caps follow the same compounded-in-arrears convention and are treated identically. The rate conventions (one-day
 lookback, one rate cut-off day, two-day payment delay; see~\cite{henrard2025conv}) shift dates by one
 or two days. We ignore them, as Henrard does for the analogous payment-date mismatch, whose
 convexity effect is negligible~\cite[Sec.~3.7]{henrard2026}.
