@@ -6,6 +6,7 @@
 \usepackage{siunitx}
 \usepackage[hidelinks]{hyperref}
 \usepackage{xcolor}
+\usepackage[section]{placeins}
 \graphicspath{{../figures/}}
 
 \title{\bfseries Multi-Curve Calibration of a Two-Factor Lifted-CIR\\
@@ -360,7 +361,7 @@ ATM and core errors are unchanged, while every maturity bucket from \(1\)Y impro
 it lowers the ATM and liquid-core errors by \(18\%\) and \(25\%\), with little change in the overall
 RMSE. Figures~\ref{fig:surface3d} and~\ref{fig:review} show the fitted surface and its residuals.
 
-\begin{figure}[t]
+\begin{figure}[!htbp]
 \centering
 \includegraphics[width=0.86\textwidth]{fig_eur_surface3d.png}
 \caption{EUR caplet normal-volatility surface, \(t_{\text{fix}}\le10\)Y: model (coloured) and
@@ -370,7 +371,7 @@ uniform index, with actual strikes on the axis labels.}
 \label{fig:surface3d}
 \end{figure}
 
-\begin{table}[t]
+\begin{table}[!htbp]
 \centering
 \begin{tabular}{lrrr}
 \toprule
@@ -393,6 +394,18 @@ deviation over three seeds at \(2\times10^5\) paths; all columns evaluated by th
 \label{tab:fit}
 \end{table}
 
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=\textwidth]{fig_eur_review.png}
+\caption{EUR calibration diagnostics. Top left: ATM term structure, market (black) and model (red).
+Top right: smile slices at 1, 2, 5 and 10Y, market solid and model dashed. Bottom left: residual
+\(\text{model}-\text{market}\) (bp) by maturity and strike. Bottom right: residual histogram for the
+liquid core and the wings. Residuals are small from \(1\)Y; the main misfits are the \(0.5\)--\(1\)Y
+ATM level (Section~\ref{sec:discussion}) and the near-intrinsic short-dated deep-ITM wing.}
+\label{fig:review}
+\end{figure}
+
+\FloatBarrier
 \subsection{Nested-model ladder}
 \label{sec:ladder}
 Table~\ref{tab:ladder} compares the nested restrictions, each calibrated and evaluated exactly as
@@ -401,7 +414,7 @@ the headline fit. The three models with \(\varepsilon=0\), whose smiles are stri
 to \(5.9\), \(2.0\) and \(2.8\bp\). Neither a second Gaussian factor nor a deterministic volatility
 term structure helps: stochastic volatility fits the surface at the money as well as in the wings.
 
-\begin{table}[t]
+\begin{table}[!htbp]
 \centering
 \begin{tabular}{lrrr}
 \toprule
@@ -419,6 +432,17 @@ first three have \(\varepsilon=0\) and strike-flat smiles. Seed standard deviati
 \label{tab:ladder}
 \end{table}
 
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=\textwidth]{fig_eur_ladder.png}
+\caption{Nested-model ladder: RMSE bars (left), ATM term structure (centre), and the \(5\)Y smile
+(right). The Gaussian/deterministic-vol rungs are strike-flat; only the stochastic-volatility model
+follows the market smile, and only it tracks the ATM term structure. Same set-up as
+Table~\ref{tab:ladder}.}
+\label{fig:ladder}
+\end{figure}
+
+\FloatBarrier
 \subsection{Calibrated parameters}
 The model has \(27\) free parameters: two \(8\)-node long-run variance term structures
 \(\theta_1,\theta_2\), a \(3\)-node leverage term structure \(\rho\), the two mean reversions
@@ -442,7 +466,7 @@ and no gain in fit (RMSE \(5.92\) against \(5.90\bp\); ATM and liquid core sligh
 \(3.1\bp\)): \(\kappa_f\) is only weakly identified between about \(1\) and \(1.6\), and the bound does
 not limit the fit.
 
-\begin{table}[t]
+\begin{table}[!htbp]
 \centering
 \begin{tabular}{lcccccccc}
 \toprule
@@ -457,7 +481,7 @@ node (yr) & 0.25 & 0.5 & 1 & 2 & 3 & 5 & 7 & 10 \\
 \label{tab:theta}
 \end{table}
 
-\begin{table}[t]
+\begin{table}[!htbp]
 \centering
 \begin{tabular}{lccccccccc}
 \toprule
@@ -475,28 +499,7 @@ node (yr) & 0.25 & 0.5 & 1 & 2 & 3 & 5 & 7 & 10 \\
 \label{tab:scalar}
 \end{table}
 
-\begin{figure}[t]
-\centering
-\includegraphics[width=\textwidth]{fig_eur_review.png}
-\caption{EUR calibration diagnostics. Top left: ATM term structure, market (black) and model (red).
-Top right: smile slices at 1, 2, 5 and 10Y, market solid and model dashed. Bottom left: residual
-\(\text{model}-\text{market}\) (bp) by maturity and strike. Bottom right: residual histogram for the
-liquid core and the wings. Residuals are small from \(1\)Y; the main misfits are the \(0.5\)--\(1\)Y
-ATM level (Section~\ref{sec:discussion}) and the near-intrinsic short-dated deep-ITM wing.}
-\label{fig:review}
-\end{figure}
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\textwidth]{fig_eur_ladder.png}
-\caption{Nested-model ladder: RMSE bars (left), ATM term structure (centre), and the \(5\)Y smile
-(right). The Gaussian/deterministic-vol rungs are strike-flat; only the stochastic-volatility model
-follows the market smile, and only it tracks the ATM term structure. Same set-up as
-Table~\ref{tab:ladder}.}
-\label{fig:ladder}
-\end{figure}
-
-
+\FloatBarrier
 \subsection{Cross-market robustness}
 To check that the fit is not an EUR artefact, the identical pipeline (QE simulation, vega-weighted
 objective, \(27\) parameters, \(800\) SPSA iterations, \(dt=1/252\)) was applied to the USD and GBP caplet
@@ -514,7 +517,7 @@ unchanged, the same evaluation of the earlier calibration gives \(9.6\bp\) from 
 \(6.7\bp\) now.
 Figure~\ref{fig:cross} shows the market-vs-model ATM term structure and \(5\)Y smile for each.
 
-\begin{table}[t]
+\begin{table}[!htbp]
 \centering
 \begin{tabular}{llrrrrr}
 \toprule
@@ -531,7 +534,7 @@ of the RMSE \(\le0.27\bp\), below \(0.1\bp\) elsewhere.}
 \label{tab:cross}
 \end{table}
 
-\begin{figure}[t]
+\begin{figure}[!htbp]
 \centering
 \includegraphics[width=\textwidth]{fig_cross_market.png}
 \caption{Cross-market HWH calibration (QE, vega-weighted, daily grid \(dt=1/252\)): ATM term
