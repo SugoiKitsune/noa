@@ -350,27 +350,23 @@ retained.
 
 \section{Results}
 \subsection{Goodness of fit}
-Table~\ref{tab:fit} summarises the fit of the proposed model. The overall RMSE is \(5.9\bp\), the
-ATM term structure is reproduced to \(2.0\bp\) mean absolute error, and the liquid core
-(\(|K-F|<2\%\), \(F\) the market forward) is fitted to \(2.8\bp\). Reported figures are means over
-three Monte-Carlo seeds at \(2\times10^5\) paths, with the seed standard deviation. The other two
-columns re-price, with the same evaluation, the two earlier calibrations, and separate the two
-corrections. Treating Euribor as a term rate rather than an in-arrears average (third to second
-column) leaves ATM and core unchanged and removes a quarter of the error away from the money, at
-every maturity from \(1\)Y. Fitting the initial curves (second to first column) does the opposite:
-it places each strike at the market forward, and so tightens the ATM and liquid-core errors by a
-fifth and a quarter. Figure~\ref{fig:surface3d} overlays the entire calibrated
-surface on the market mesh; Figure~\ref{fig:review} then breaks the fit down into the ATM term
-structure, representative smile slices, and the signed residual surface.
+Table~\ref{tab:fit} reports the fit. The proposed model attains an RMSE of \(5.9\bp\), an ATM mean
+absolute error of \(2.0\bp\) and a liquid-core (\(|K-F|<2\%\), \(F\) the market forward) RMSE of
+\(2.8\bp\), as means \(\pm\) standard deviation over three Monte Carlo seeds at \(2\times10^5\) paths.
+The remaining columns re-evaluate the two earlier calibrations and isolate each correction. The
+term payoff (third to second column) lowers the RMSE by \(27\%\), entirely away from the money:
+ATM and core errors are unchanged, while every maturity bucket from \(1\)Y improves. The curve fit
+(second to first column) has the opposite effect: by measuring strikes against the market forward
+it lowers the ATM and liquid-core errors by \(18\%\) and \(25\%\), with little change in the overall
+RMSE. Figures~\ref{fig:surface3d} and~\ref{fig:review} show the fitted surface and its residuals.
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.86\textwidth]{fig_eur_surface3d.png}
-\caption{The calibrated EUR caplet normal-volatility surface (coloured) with the market surface
-overlaid as a black mesh. The mesh sits on the model surface across the liquid body of the surface;
-the only visible separation is the short-maturity deep-ITM wing, where the near-intrinsic quotes
-carry negligible vega. Strike is shown on a uniform index (real strikes on the tick labels) so the
-non-uniform strike ladder does not warp the mesh.}
+\caption{EUR caplet normal-volatility surface, \(t_{\text{fix}}\le10\)Y: model (coloured) and
+market (black mesh). Model and market agree across the liquid part of the surface and separate only
+in the short-dated deep in-the-money wing, where quotes are near intrinsic. Strikes are plotted on a
+uniform index, with actual strikes on the axis labels.}
 \label{fig:surface3d}
 \end{figure}
 
@@ -399,34 +395,27 @@ deviation over three seeds at \(2\times10^5\) paths; all columns evaluated by th
 
 \subsection{Nested-model ladder}
 \label{sec:ladder}
-Table~\ref{tab:ladder} decomposes the fit across the nested restrictions on identical data, with
-every rung calibrated and evaluated exactly as the headline fit: daily step, Euribor term payoff,
-initial-curve fit, vega-weighted objective, \(800\) SPSA iterations, three seeds at
-\(2\times10^5\) paths. The Gaussian restrictions (flat smile) and the deterministic-vol term
-structure all sit at \(45\)--\(47\bp\), with ATM and liquid-core errors near \(20\bp\); introducing
-the two-factor stochastic variance (HWH) reduces these to \(5.9\), \(2.0\) and \(2.8\bp\). A second
-Gaussian factor does not help, and neither does a deterministic volatility term structure:
-stochastic volatility is what fits the surface, at the money as well as in the wings.
+Table~\ref{tab:ladder} compares the nested restrictions, each calibrated and evaluated exactly as
+the headline fit. The three models with \(\varepsilon=0\), whose smiles are strike-flat, reach
+\(45\)--\(47\bp\) with ATM and liquid-core errors near \(20\bp\); the stochastic variance brings these
+to \(5.9\), \(2.0\) and \(2.8\bp\). Neither a second Gaussian factor nor a deterministic volatility
+term structure helps: stochastic volatility fits the surface at the money as well as in the wings.
 
 \begin{table}[t]
 \centering
-\begin{tabular}{lcccrrr}
+\begin{tabular}{lrrr}
 \toprule
-Model & Smile & \(\varepsilon\) & & RMSE & ATM MAE & core RMSE \\
+Model (bp) & RMSE & ATM MAE & core \\
 \midrule
-1F Gaussian Hull--White         & flat           & 0 & & \(46.7\) & \(18.7\) & \(18.9\) \\
-2F Gaussian Hull--White         & flat           & 0 & & \(47.1\) & \(18.4\) & \(18.2\) \\
-Hull--White + deterministic vol & term structure & 0 & & \(45.3\) & \(21.2\) & \(21.3\) \\
-\textbf{2F lifted-CIR HWH (proposed)} & \textbf{full} & \(\mathbf{0.10}\) & & \(\mathbf{5.9}\) &
-\(\mathbf{2.0}\) & \(\mathbf{2.8}\) \\
+1F Gaussian HW         & 46.7 & 18.7 & 18.9 \\
+2F Gaussian HW         & 47.1 & 18.4 & 18.2 \\
+HW + deterministic vol & 45.3 & 21.2 & 21.3 \\
+\textbf{HWH (proposed)} & \textbf{5.9} & \textbf{2.0} & \textbf{2.8} \\
 \bottomrule
 \end{tabular}
-\caption{Nested-model ladder on the EUR surface (\(340\) caplets), errors in bp. All rungs are fitted
-and evaluated by the same procedure as the headline fit (daily step, term payoff, initial-curve
-fit, vega-weighted objective; means over three seeds at \(2\times10^5\) paths, seed standard
-deviation below \(0.6\bp\) on the RMSE and \(0.1\bp\) on the other columns). The Gaussian and
-deterministic-vol rungs have \(\varepsilon=0\), so their variance is deterministic and their smile
-strike-flat; they define the baseline that only the stochastic-volatility model breaks.}
+\caption{Nested-model ladder, EUR. All models fitted and evaluated as in Table~\ref{tab:fit}; the
+first three have \(\varepsilon=0\) and strike-flat smiles. Seed standard deviation below
+\(0.6\bp\) (RMSE) and \(0.1\bp\) (other columns).}
 \label{tab:ladder}
 \end{table}
 
@@ -489,11 +478,11 @@ node (yr) & 0.25 & 0.5 & 1 & 2 & 3 & 5 & 7 & 10 \\
 \begin{figure}[t]
 \centering
 \includegraphics[width=\textwidth]{fig_eur_review.png}
-\caption{EUR calibration, market (black) vs.\ model (red). Top-left: ATM term structure; remaining
-panels: smile slices at 1/2/5/10Y and the signed residual surface (\(\text{model}-\text{market}\),
-bp). The residual is small across the body of the surface from \(1\)Y; the material bands are the
-\(0.5\)--\(1\)Y expiries, whose ATM level the model undershoots (Section~\ref{sec:discussion}), and
-their deep-ITM wing, where the near-intrinsic quotes carry negligible vega.}
+\caption{EUR calibration diagnostics. Top left: ATM term structure, market (black) and model (red).
+Top right: smile slices at 1, 2, 5 and 10Y, market solid and model dashed. Bottom left: residual
+\(\text{model}-\text{market}\) (bp) by maturity and strike. Bottom right: residual histogram for the
+liquid core and the wings. Residuals are small from \(1\)Y; the main misfits are the \(0.5\)--\(1\)Y
+ATM level (Section~\ref{sec:discussion}) and the near-intrinsic short-dated deep-ITM wing.}
 \label{fig:review}
 \end{figure}
 
