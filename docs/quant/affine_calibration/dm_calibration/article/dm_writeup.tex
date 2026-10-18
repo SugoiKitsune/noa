@@ -63,17 +63,21 @@ correlation), while keeping the model tractable for large-scale Monte Carlo cali
 purpose of this note is to document precisely \emph{what} process is fitted, \emph{how} the market
 data are fed in, and \emph{how well} the joint calibration reproduces the full surface.
 
-\paragraph{Contributions.} The construction combines five ingredients into one calibratable object.
+\paragraph{Contributions.} The construction combines six ingredients into one calibratable object.
 (i) A genuinely \emph{multi-curve} state (OIS discount + Euribor projection, coupled through a
-shared factor and a basis factor), so the smile is priced consistently across both curves.
+shared factor and a basis factor), within the multiple-yield-curve framework of Cuchiero, Fontana
+and Gnoatto~\cite{fontana2016hjm,cfg2019}, so the smile is priced consistently across both curves.
 (ii) A \emph{lifted} stochastic variance---a two-factor CIR mixture that is a low-order Markovian
 lift, in the sense of Abi~Jaber and El~Euch~\cite{abijaber2019multi} and
 Cuchiero and Teichmann~\cite{cuchiero2019}, of a rough/multi-scale volatility---built from affine (CIR) factors and
 directly simulable. (iii) A \emph{large-scale joint calibration}: one \(27\)-parameter vector fit to
 the entire caplet surface by GPU Monte Carlo and a gradient-free Adam--SPSA
 optimiser~\cite{spall1998,kingma2015}. (iv) The Andersen QE scheme~\cite{andersen2008} for the
-Feller-violated low-vol regime typical of the current low-rate environment. (v) A vega-weighted objective that
-targets the liquid core. We report the EUR fit and its robustness across USD and GBP.
+Feller-violated regime (\(2\kappa\theta\ll\varepsilon^2\)) in which the calibrated variance factors
+live. (v) A vega-weighted objective that targets the liquid core. (vi) Caplets priced as the contract
+each market actually trades---a forward-looking Euribor term rate in EUR, a compounded in-arrears
+overnight rate in USD and GBP~\cite{lyashenko2019,fontana2023caplet}---with the model repricing the
+initial curves exactly. We report the EUR fit and its robustness across USD and GBP.
 
 \section{Related literature}
 \label{sec:lit}
