@@ -506,8 +506,8 @@ all three, with a single parameter set per market, despite the different underly
 conventions and surface sizes (USD/GBP carry \(697\) caplets on the 3M grid, including the first
 period, vs \(340\) for EUR). The RFR headline is computed from \(t_{\text{fix}}\ge0.5\)Y: the first
 caplet (\(t_{\text{fix}}=0\), effective expiry \(\tau/3\approx1\)M) has near-intrinsic wings whose
-inverted volatilities are numerically meaningless, and we report it separately rather than let it
-dominate the average. From \(3\)Y the three markets are fitted to similar accuracy (\(3\)--\(6\bp\) by
+inverted volatilities are numerically meaningless, so we report it separately (RMSE \(63\bp\) USD,
+\(77\bp\) GBP) rather than let it dominate the average. From \(3\)Y the three markets are fitted to similar accuracy (\(3\)--\(6\bp\) by
 maturity bucket); below that the RFR markets are weaker, USD between \(1\) and \(3\)Y (\(12.9\bp\)) and
 GBP below \(1\)Y (Section~\ref{sec:discussion}). On the GBP surface, which is the one whose curves are
 unchanged, the same evaluation of the earlier calibration gives \(9.6\bp\) from \(6\)M, against
@@ -525,13 +525,9 @@ USD & 3M SOFR, in-arrears  & 697 & \(7.98\) & \(2.17\) & \(3.96\) & \(16.04\) \\
 GBP & 3M SONIA, in-arrears & 697 & \(6.72\) & \(4.21\) & \(4.52\) & \(18.25\) \\
 \bottomrule
 \end{tabular}
-\caption{Cross-market robustness: the same model and calibration on three caplet surfaces, all on
-the daily grid \(dt=1/252\) at \(800\) SPSA iterations. All figures in bp; the first three error
-columns are over \(t_{\text{fix}}\ge0.5\)Y (the whole EUR surface), the last over the full surface
-including the first RFR caplet, whose own RMSE is \(63\) (USD) and \(77\bp\) (GBP). Means over three
-seeds at \(2\times10^5\) paths; the seed standard deviation of the headline RMSE is \(0.02\) (EUR),
-\(0.08\) (USD) and \(0.27\bp\) (GBP), and is below \(0.1\bp\) on the ATM and liquid-core columns.
-All three fits include the initial-curve shift.}
+\caption{Cross-market fit (bp), daily grid, curve fit included. Error columns over
+\(t_{\text{fix}}\ge0.5\)Y; the last column includes the first RFR caplet. Seed standard deviation
+of the RMSE \(\le0.27\bp\), below \(0.1\bp\) elsewhere.}
 \label{tab:cross}
 \end{table}
 
