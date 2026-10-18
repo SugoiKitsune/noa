@@ -314,29 +314,39 @@ then match the market to within \(0.2\bp\) at every maturity. In an HJM formulat
 curve is matched by construction; the shift \(\varphi\) is
 what restores that property for a short-rate model.
 
-\paragraph{Time step and the accrual window.} The in-arrears payoff compounds the rate over the
-accrual period \([T,T+\tau]\), and in discrete time that integral is taken over
-\((i_{\text{pay}}-i_{\text{fix}})\) whole time steps; the term payoff uses the same window for its
-deterministic part and its factor loadings \(B_\lambda,B_\gamma\). The step is therefore not a free
-numerical parameter: unless \(\tau/dt\) is an integer, the simulated accrual period is not \(\tau\). At \(dt=0.03\) a \(6\)M window rounds to
-\(16\) or \(17\) steps depending on maturity---\(0.48\) or \(0.51\)Y against a contractual
-\(0.5\)---and a \(3\)M window to \(8\) or \(9\) steps, an error of up to \(+8\%\). At \(dt=0.02\)
-the \(6\)M tenor is exact (\(25\) steps) but the \(3\)M tenor is not (\(12.5\)), so the USD and GBP
-windows alternate by \(\pm4\%\) across maturities. We therefore simulate on the \emph{daily} grid
-\(dt=1/252\), for which \(\tau/dt\) is exactly \(126\) steps at \(6\)M and \(63\) at \(3\)M in every
-market: each business day in the accrual period is represented, as it is in an RFR contract. With
-the earlier in-arrears treatment of EUR this was the binding constraint: the EUR fit improved from
-\(15.1\bp\) at \(dt=0.03\) to \(8.6\bp\) at \(dt=1/252\), and moving USD from a misaligned step to the
-exact daily grid improved its ATM mean absolute error from \(5.2\) to \(3.6\bp\).
+\paragraph{Time step.} The rate is accrued on the simulation grid, so each accrual period must span
+a whole number of steps. On the daily grid \(dt=1/252\) a \(6\)M period is exactly \(126\) steps and
+a \(3\)M period \(63\), so every business day is represented, as in an RFR contract; at \(dt=0.02\) a
+\(3\)M period would be \(12.5\) steps. In earlier runs the daily grid cut the USD ATM error from
+\(5.2\) to \(3.6\bp\).
 
-\paragraph{Objective.} Parameters are estimated by minimising a \emph{vega-weighted} normal-vol
-RMSE. Each caplet is weighted by its Bachelier vega shape \(\phi(d)\) (with a \(20\%\) floor):
-this fits the liquid ATM tightly and down-weights the near-intrinsic deep-ITM and far-OTM wings,
-whose quoted volatilities carry almost no vega and are numerically ill-defined. Optimisation uses a
-self-contained Adam--SPSA (simultaneous-perturbation) scheme---gradient-free, appropriate for the
-noisy, non-differentiable Monte Carlo objective---with cosine step/perturbation decay. The loss
-converges by \(\approx 150\) iterations and then oscillates at the SPSA noise floor; the running
-best is retained.
+\paragraph{Objective.} Parameters \(\Theta\) are estimated by minimising a \emph{vega-weighted}
+normal-volatility RMSE over the \(N\) caplets,
+\begin{equation}
+\mathcal{L}(\Theta)=\Big(\frac{1}{N}\sum_{j=1}^{N} w_j\,
+\big(\sigma^{\text{mod}}_j(\Theta)-\sigma^{\text{mkt}}_j\big)^2\Big)^{1/2},
+\qquad
+w_j\propto\max\!\big(e^{-d_j^2/2},\,0.2\big)\,\big(1+\tfrac12\,\mathbf{1}_{\{t_{\text{fix},j}<1\}}\big),
+\end{equation}
+with \(d_j=(K^{\text{atm}}_j-K_j)\big/\big(\sigma^{\text{mkt}}_j\sqrt{\max(T_{\text{exp},j},0.1)}\big)\),
+the weights normalised to mean one, and \(K^{\text{atm}}_j\) the strike of lowest market volatility
+in caplet \(j\)'s maturity slice. The factor \(e^{-d^2/2}\) is the shape of the Bachelier vega:
+it fits the liquid ATM tightly and down-weights the near-intrinsic deep-ITM and far-OTM wings, whose
+quoted volatilities carry almost no vega and are numerically ill-defined; the \(20\%\) floor keeps
+the wings in the fit, and the factor \(1.5\) on maturities below \(1\)Y counters the few short-dated
+slices. All reported errors are unweighted. The parameters are optimised in a box-normalised space
+\([0,1]^{27}\) by Adam~\cite{kingma2015} on the simultaneous-perturbation (SPSA)
+gradient~\cite{spall1998}
+\begin{equation}
+\hat g(\Theta)=\frac{1}{M}\sum_{m=1}^{M}
+\frac{\mathcal{L}(\Theta+c\,\Delta_m)-\mathcal{L}(\Theta-c\,\Delta_m)}{2c}\,\Delta_m ,
+\end{equation}
+with Rademacher directions \(\Delta_m\in\{\pm1\}^{27}\), \(M=8\), and cosine decay of the step
+(\(3\times10^{-3}\)) and of the perturbation \(c\) (\(0.02\)) over \(800\) iterations. The estimator
+is gradient-free, which suits the noisy, non-smooth Monte Carlo objective, and the \(2M+1\)
+evaluations of an iteration are simulated in one batched pass. The loss converges by
+\(\approx 150\) iterations and then oscillates at the SPSA noise floor; the running best is
+retained.
 
 \section{Results}
 \subsection{Goodness of fit}
