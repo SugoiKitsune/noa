@@ -270,7 +270,7 @@ lookback, one rate cut-off day, two-day payment delay) shift dates by one
 or two days. We ignore them; their convexity effect is negligible.
 
 \section{Market data}
-Three market inputs are fed in, all sourced from Bloomberg:
+Three market inputs are fed in, all sourced from Bloomberg and taken as of 30 June 2026:
 \begin{itemize}
   \item the OIS forward curve (\(360\) monthly points to \(30\)Y) for discounting;
   \item the 6M~Euribor projection forward curve (\(360\) monthly points) for the caplet underlying; and
@@ -368,7 +368,7 @@ RMSE. Figures~\ref{fig:surface3d} and~\ref{fig:review} show the fitted surface a
 \caption{EUR caplet normal-volatility surface, \(t_{\text{fix}}\le10\)Y: model (coloured) and
 market (black mesh). Model and market agree across the liquid part of the surface and separate only
 in the short-dated deep in-the-money wing, where quotes are near intrinsic. Strikes are plotted on a
-uniform index, with actual strikes on the axis labels.}
+uniform index, with actual strikes on the axis labels. Market data: Bloomberg, 30 June 2026.}
 \label{fig:surface3d}
 \end{figure}
 
@@ -402,7 +402,7 @@ deviation over three seeds at \(2\times10^5\) paths; all columns evaluated by th
 Top right: smile slices at 1, 2, 5 and 10Y, market solid and model dashed. Bottom left: residual
 \(\text{model}-\text{market}\) (bp) by maturity and strike. Bottom right: residual histogram for the
 liquid core and the wings. Residuals are small from \(1\)Y; the main misfits are the \(0.5\)--\(1\)Y
-ATM level (Section~\ref{sec:discussion}) and the near-intrinsic short-dated deep-ITM wing.}
+ATM level (Section~\ref{sec:discussion}) and the near-intrinsic short-dated deep-ITM wing. Market data: Bloomberg, 30 June 2026.}
 \label{fig:review}
 \end{figure}
 
@@ -439,7 +439,7 @@ first three have \(\varepsilon=0\) and strike-flat smiles. Seed standard deviati
 \caption{Nested-model ladder: RMSE bars (left), ATM term structure (centre), and the \(5\)Y smile
 (right). The Gaussian/deterministic-vol rungs are strike-flat; only the stochastic-volatility model
 follows the market smile, and only it tracks the ATM term structure. Same set-up as
-Table~\ref{tab:ladder}.}
+Table~\ref{tab:ladder}. Market data: Bloomberg, 30 June 2026.}
 \label{fig:ladder}
 \end{figure}
 
@@ -541,7 +541,7 @@ of the RMSE \(\le0.27\bp\), below \(0.1\bp\) elsewhere.}
 \caption{Cross-market HWH calibration (QE, vega-weighted, daily grid \(dt=1/252\)): ATM term
 structure (top row) and \(5\)Y smile (bottom row) for EUR, USD and GBP; market (black) vs.\ model
 (red). The market term structures are piecewise flat because the stripped caplet volatility is
-constant between quoted cap maturities.}
+constant between quoted cap maturities. Market data: Bloomberg, 30 June 2026.}
 \label{fig:cross}
 \end{figure}
 
